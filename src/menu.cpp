@@ -2,10 +2,11 @@
 #include "bitmaps.h"
 
 // Setup display
-// If using an OLED with an SH1106 chip then leave this be
-// If using an OLED with an SSD1306 chip then comment out the SH1106 line and uncomment the SSD1306 line
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
-// U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+#ifdef SH1106
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, SCL_PIN, SDA_PIN);
+#else
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, SCL_PIN, SDA_PIN);
+#endif
 
 // Create items in main menu
 menuItemStruct mainMenuItems[] = {
@@ -66,6 +67,11 @@ menuStruct menus[] = {
   { "Wi-Fi", nullptr, 1, 0 },  // Given length of 1 to prevent zero-division
   { "Calibration", calibrationMenuItems, 2, 0 }
 };
+
+template <typename T>
+const T& clamp(const T& value, const T& low, const T& high) {
+    return (value < low) ? low : (value > high) ? high : value;
+}
 
 // Update menu icons based on settings
 void updateMenuIcons(menuStruct *menu, int selected) {
@@ -167,7 +173,7 @@ void drawScanMenu(menuStruct *menu, int rssiValues[61], int numFrequenciesToScan
   }
 
   // Clamp and convert rssi to percentage
-  currentFrequencyRssi = std::clamp(currentFrequencyRssi, calibratedRssi[0], calibratedRssi[1]);
+  currentFrequencyRssi = clamp(currentFrequencyRssi, calibratedRssi[0], calibratedRssi[1]);
   char percentageStr[5];
   snprintf(percentageStr, sizeof(percentageStr), "%d%%", map(currentFrequencyRssi, calibratedRssi[0], calibratedRssi[1], 0, 100));
 
@@ -178,7 +184,7 @@ void drawScanMenu(menuStruct *menu, int rssiValues[61], int numFrequenciesToScan
   // Iterate through rssi values
   for (int i = 0; i < numFrequenciesToScan; i++) {
     // Clamp value between calibrated min and max
-    int rssiValue = std::clamp(rssiValuesCopy[i], calibratedRssi[0], calibratedRssi[1]);
+    int rssiValue = clamp(rssiValuesCopy[i], calibratedRssi[0], calibratedRssi[1]);
 
     // Calculate height of individual bar
     int barHeight = map(rssiValue, calibratedRssi[0], calibratedRssi[1], 0, BAR_Y_MAX - BAR_Y_MIN);
