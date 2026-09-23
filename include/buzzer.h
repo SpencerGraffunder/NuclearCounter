@@ -6,7 +6,7 @@
 #define BUZZ_DURATION 20
 #define BUZZ_DELAY 80
 
-#define BUZZER_STACK_SIZE 512
+#define BUZZER_STACK_SIZE 2048
 
 // Buzzer class for buzzer module
 class Buzzer {

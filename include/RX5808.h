@@ -13,7 +13,7 @@
 #define RSSI_STABILISATION_TIME 30
 #define RSSI_SAMPLES 30
 
-#define SCAN_STACK_SIZE 2048
+#define SCAN_STACK_SIZE 4096
 
 // RX5808 receiver module
 class RX5808 {
