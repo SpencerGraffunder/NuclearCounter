@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include "about.h"
+#include "sh1306.h"
 #include "api.h"
 #include "battery.h"
 #include "bitmaps.h"
@@ -97,7 +98,15 @@ private:
   Api *api;
 
 #ifdef SH1106
+  // SH1106: MUST use the F (full-frame, 64-row) buffer. The _2_ variants use a
+  // 2-page (16-row) line buffer that only drives the top 16px of the panel —
+  // everything below row 15 goes black (verified with an on-screen border test).
   U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2;
+#elif defined(SH1306)
+  // SH1306: SH1106 chip, 130-col glass, visible 128 cols start at column 0
+  // (spare 128-129 on the right). Not in U8g2 — registered locally (see
+  // include/sh1306.h, src/u8g2_sh1306.c). Full-frame buffer, same as SH1106.
+  U8G2_SH1306_128X64_NONAME_F_HW_I2C u8g2;
 #else
   U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
 #endif

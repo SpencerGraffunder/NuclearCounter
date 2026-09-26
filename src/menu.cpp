@@ -24,6 +24,28 @@ void Menu::begin() {
 
   u8g2.begin();
   u8g2.clearBuffer();
+
+#ifdef SH1306
+  // SH1306 panels have a per-panel glass defect: two columns near the right
+  // edge bleed/glow when the column next to them is driven (visible in every
+  // menu, invisible on a pure black frame). The defect location varies per
+  // panel, so the app keeps a 6px black guard on the right: nothing is ever
+  // drawn into image columns 122-127. On top of that:
+  //  1. x_offset = 0 (native SH1306 layout) leaves RAM 128-131 unaddressed.
+  //  2. Clear the full RAM twice (three clears at offsets 0/2/4 per pass) so
+  //     the unaddressed columns show black, not uninitialized white (the
+  //     repeat guards against an I2C flake at boot).
+  for (int pass = 0; pass < 2; pass++) {
+    u8g2.getU8x8()->x_offset = 0;
+    u8g2.clearDisplay();
+    u8g2.getU8x8()->x_offset = 2;
+    u8g2.clearDisplay();
+    u8g2.getU8x8()->x_offset = 4;
+    u8g2.clearDisplay();
+    u8g2.getU8x8()->x_offset = 0;
+    delay(50);
+  }
+#endif
 }
 
 // Handle navigation between menus
@@ -196,7 +218,13 @@ void Menu::drawBatteryVoltage(int voltage) {
     // Set font colour to inverted if selected bottom item
     u8g2.setDrawColor(menus[MAIN].menuIndex == 2 ? 0 : 1);
     u8g2.setFont(u8g2_font_5x7_tf);
+#ifdef SH1306
+    // Right-anchored so "x.xv" (4 chars, 6px advance) ends at col 121,
+    // inside the 6px black guard (see Menu::begin)
+    u8g2.drawStr(99, DISPLAY_HEIGHT, formattedVoltage);
+#else
     u8g2.drawStr(109, DISPLAY_HEIGHT, formattedVoltage);
+#endif
     u8g2.setDrawColor(1);
   }
 }
@@ -206,8 +234,13 @@ void Menu::drawSelectionMenu() {
   // Draw menu items
   for (int i = 0; i < menus[menuIndex].menuItemsLength; i++) {
     if (i == menus[menuIndex].menuIndex) {
-      // Highlight selection
+      // Highlight selection. SH1306: inset 6px on the right so the box never
+      // reaches the black guard zone (image cols 122-127, see Menu::begin)
+#ifdef SH1306
+      u8g2.drawBox(0, 16 + (i * 16), DISPLAY_WIDTH - 6, 16);
+#else
       u8g2.drawBox(0, 16 + (i * 16), DISPLAY_WIDTH, 16);
+#endif
       u8g2.setDrawColor(0);
       u8g2.drawXBMP(10, 17 + (i * 16), 14, 14, menus[menuIndex].menuItems[i].icon);
       u8g2.drawStr(30, 28 + (i * 16), menus[menuIndex].menuItems[i].name);
@@ -246,23 +279,33 @@ void Menu::drawScanMenu() {
   int maxRssi = settings->highCalibratedRssi.get();
 
   // Draw bottom numbers
+  // SH1306: 2px left margin + right label kept inside the 6px right guard
+  // (see Menu::begin); other panels use the original positions
+#ifdef SH1306
+  const int margin = 2;
+  const int rightScaleX = 99;
+#else
+  const int margin = 0;
+  const int rightScaleX = 109;
+#endif
+
   u8g2.setFont(u8g2_font_5x7_tf);
   if (module->lowband.get()) {
-    u8g2.drawStr(0, DISPLAY_HEIGHT, "5345");
+    u8g2.drawStr(margin, DISPLAY_HEIGHT, "5345");
     u8g2.drawStr(55, DISPLAY_HEIGHT, "5495");
-    u8g2.drawStr(109, DISPLAY_HEIGHT, "5645");
+    u8g2.drawStr(rightScaleX, DISPLAY_HEIGHT, "5645");
   } else {
-    u8g2.drawStr(0, DISPLAY_HEIGHT, "5645");
+    u8g2.drawStr(margin, DISPLAY_HEIGHT, "5645");
     u8g2.drawStr(55, DISPLAY_HEIGHT, "5795");
-    u8g2.drawStr(109, DISPLAY_HEIGHT, "5945");
+    u8g2.drawStr(rightScaleX, DISPLAY_HEIGHT, "5945");
   }
 
   // Draw high or low band
   u8g2.setFont(u8g2_font_7x13_tf);
   if (module->lowband.get()) {
-    u8g2.drawStr(0, 13, "LOW");
+    u8g2.drawStr(margin, 13, "LOW");
   } else {
-    u8g2.drawStr(0, 13, "HIGH");
+    u8g2.drawStr(margin, 13, "HIGH");
   }
 
   // Draw selected frequency
@@ -285,7 +328,13 @@ void Menu::drawScanMenu() {
   snprintf(percentageStr, sizeof(percentageStr), "%d%%", map(currentFrequencyRssi, minRssi, maxRssi, 0, 100));
 
   // Draw rssi percentage accounting for changes from 3 to 4 characters
+#ifdef SH1306
+  // Right-anchored inside the 6px guard: 7x13 font is 7px wide, 8px advance,
+  // so the last pixel lands at x + (len-1)*8 + 6 <= 121
+  int percentageX = DISPLAY_WIDTH - 7 - (strlen(percentageStr) - 1) * 8 - 6;
+#else
   int percentageX = DISPLAY_WIDTH - (strlen(percentageStr) * 7) + 1;
+#endif
   u8g2.drawStr(percentageX, 13, percentageStr);
 
   // Iterate through rssi values
