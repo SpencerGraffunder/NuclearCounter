@@ -202,7 +202,7 @@ This repo has a GitHub Action (`.github/workflows/build.yml`) that builds **both
 
 **1. Run the action**
 
-Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)** → **Run workflow**. It builds both chips and uploads the two artifacts above. (It also runs on push to `main`.)
+Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)** → **Run workflow**. It builds both chips and uploads the two artifacts above. It also runs automatically on every push to `feat/dualboot` (or `main`) — a fresh artifact appears on each run's summary page.
 
 > [!NOTE]
 >
