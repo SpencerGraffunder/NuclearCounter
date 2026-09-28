@@ -1,3 +1,4 @@
+#include <esp_ota_ops.h>
 #include "api.h"
 #include "battery.h"
 #include "buzzer.h"
@@ -27,6 +28,7 @@ Menu menu(PREVIOUS_BUTTON_PIN, SELECT_BUTTON_PIN, NEXT_BUTTON_PIN, &settings, &b
 void setup() {
   // Setup serial for debugging
   Serial.begin(115200);
+  delay(150);
 
   // Load settings from non-volatile memory
   settings.loadSettingsStorage();

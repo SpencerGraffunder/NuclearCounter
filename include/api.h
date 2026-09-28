@@ -9,7 +9,9 @@
 #include "RX5808.h"
 #include "settings.h"
 
-#define WIFI_IP "192.168.4.1"
+// 192.168.8.x (NOT 192.168.4.x) — 192.168.4.x collides with the home
+// network (DeerFiber 192.168.4.0/22) and breaks the Mac's routing to it.
+#define WIFI_IP "192.168.8.1"
 #define WIFI_SUBNET "255.255.255.0"
 
 // Holds state and responses for wifi and api

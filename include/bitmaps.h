@@ -69,4 +69,24 @@ const unsigned char bitmap_Calibration[] PROGMEM = {
   0x09, 0x24, 0x11, 0x22, 0xe2, 0x11, 0x04, 0x08, 0x08, 0x04, 0xf0, 0x03
 };
 
+// "Star", 14x14px  (5-point star for the StarForge dual-boot menu item)
+// Same format as the other icons: 14 rows x 2 bytes (16 bits, LSB-first;
+// byte 0 = cols 0-7, byte 1 = cols 8-13).
+const unsigned char bitmap_Star[] PROGMEM = {
+  0xc0, 0x00,  // row 0  cols 6-7
+  0xc0, 0x00,  // row 1  cols 6-7
+  0xc0, 0x00,  // row 2  cols 6-7
+  0xe0, 0x01,  // row 3  cols 5-8
+  0xe0, 0x01,  // row 4  cols 5-8
+  0xf0, 0x03,  // row 5  cols 4-9
+  0xf8, 0x07,  // row 6  cols 3-10
+  0xfc, 0x0f,  // row 7  cols 2-11
+  0xfe, 0x1f,  // row 8  cols 1-12  (widest: left+right points)
+  0xfc, 0x0f,  // row 9  cols 2-11
+  0x3c, 0x0f,  // row 10 cols 2-5, 8-11  (two bottom points, center notch)
+  0x1c, 0x0e,  // row 11 cols 2-4, 9-11
+  0x0c, 0x0c,  // row 12 cols 2-3, 10-11
+  0x04, 0x08   // row 13 cols 2, 11
+};
+
 #endif

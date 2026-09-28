@@ -78,7 +78,7 @@ private:
   menuItemStruct scanIntervalMenuItems[3];
   menuItemStruct buzzerMenuItems[2];
   menuItemStruct batteryAlarmMenuItems[3];
-  menuItemStruct advancedMenuItems[2];
+  menuItemStruct advancedMenuItems[3];
   menuItemStruct calibrationMenuItems[2];
   menuStruct menus[MENU_COUNT];
 

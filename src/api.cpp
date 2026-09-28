@@ -1,4 +1,5 @@
 #include "api.h"
+#include <esp_wifi.h>
 
 Api::Api(Settings *s, RX5808 *r, Battery *b)
   : wifiOn(false),
@@ -55,6 +56,11 @@ void Api::startWifi() {
   gateway.fromString(WIFI_IP);
   subnet.fromString(WIFI_SUBNET);
   WiFi.softAPConfig(ip, gateway, subnet);
+
+  // Force MAX TX power (20 dBm). On the S3 board the default max TX power
+  // is unset (reports 80 dBm = invalid) and the beacon is too weak to be
+  // seen by nearby clients. Setting it explicitly makes the AP visible.
+  esp_wifi_set_max_tx_power(20);
 
   WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
   server.begin();

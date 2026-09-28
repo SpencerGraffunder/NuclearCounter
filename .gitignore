@@ -2,3 +2,5 @@
 pcb/
 .pio/
 .vscode/
+# IDE generated
+compile_commands.json

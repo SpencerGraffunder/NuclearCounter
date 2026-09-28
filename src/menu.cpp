@@ -1,4 +1,5 @@
 #include "menu.h"
+#include "esp_ota_ops.h"
 
 template <typename T>
 const T& clamp(const T& value, const T& low, const T& high) {
@@ -50,6 +51,19 @@ void Menu::begin() {
 
 // Handle navigation between menus
 // Manipulates the internal menuIndex variable
+// Dual boot: request the StarForgeOS app (ota_1 slot, see partitions.csv)
+// to boot on the next restart. The bootloader + otadata partition then boot
+// the last-selected app, which is also how "boot to last used on power
+// cycle" works — no further bookkeeping needed.
+static void bootStarForge() {
+  const esp_partition_t *starforge = esp_partition_find_first(
+      ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
+  if (starforge != nullptr && esp_ota_set_boot_partition(starforge) == ESP_OK) {
+    esp_restart();
+  }
+  // No valid ota_1 slot (e.g. not flashed): fall back to the menu.
+}
+
 void Menu::handleButtons() {
   // Check menu button presses
   int prevPressed = digitalRead(previous_pin);
@@ -128,6 +142,7 @@ void Menu::handleButtons() {
         switch (menus[ADVANCED].menuIndex) {
           case 0: menuIndex = WIFI; break;         // Go to Wi-Fi menu
           case 1: menuIndex = CALIBRATION; break;  // Go to calibration menu
+          case 2: bootStarForge(); break;          // Boot the StarForgeOS slot
         }
         break;
       case SCAN_INTERVAL ... BATTERY_ALARM:  // Handle SELECT on individual settings options
@@ -442,6 +457,7 @@ void Menu::initMenus() {
   // Advanced menu
   advancedMenuItems[0] = { "Wi-Fi", bitmap_Wifi };
   advancedMenuItems[1] = { "Calibration", bitmap_Calibration };
+  advancedMenuItems[2] = { "StarForge", bitmap_Star };
 
   // Calibration menu
   calibrationMenuItems[0] = { "Calib. high", bitmap_Wifi };
@@ -452,7 +468,7 @@ void Menu::initMenus() {
   menus[1] = { "Scan", nullptr, MAX_FREQUENCIES_SCANNED, 0 };
   menus[2] = { "Settings", settingsMenuItems, 3, 0 };
   menus[3] = { "About", nullptr, 1, 0 };
-  menus[4] = { "Advanced", advancedMenuItems, 2, 0 };
+  menus[4] = { "Advanced", advancedMenuItems, 3, 0 };
   menus[5] = { "Scan interval", scanIntervalMenuItems, 3, 0 };
   menus[6] = { "Buzzer", buzzerMenuItems, 2, 0 };
   menus[7] = { "Bat. alarm", batteryAlarmMenuItems, 3, 0 };
