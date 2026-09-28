@@ -1,0 +1,162 @@
+# Builds BOTH firmwares and packages flash-ready artifacts:
+#
+#   nuclearcounter-v2.1-c3   ->  ESP32-C3 board (NuclearCounter V2.1)
+#   nuclearcounter-v3.0-s3   ->  ESP32-S3 board (NuclearCounter V3.0)
+#
+# Each artifact is a complete dual-boot flash package:
+#   Hertz Hunter  -> ota_0 (0x10000)
+#   StarForgeOS   -> ota_1 (0x150000 on C3 / 0x1A0000 on S3)
+#   StarForgeOS web UI -> spiffs (0x290000 on C3 / 0x330000 on S3)
+#   + bootloader.bin + partitions.bin + flash.sh
+#
+# NuclearCounter (this repo) is the primary repo. StarForgeOS is checked out
+# from its own repo as a build dependency — set STARFORGEOS_REPO / _REF below
+# (or via the workflow_dispatch inputs) to the branch that has the
+# nuclearcounter envs. That branch MUST exist on the remote for CI to build it.
+#
+# If StarForgeOS is a private repo, add a read-only PAT to the repo secret
+# STARFORGEOS_TOKEN. If it's public, the default GITHUB_TOKEN is enough.
+
+name: Build firmware (v2.1 C3 + v3.0 S3)
+
+on:
+  workflow_dispatch:
+    inputs:
+      starforgeos_repo:
+        description: "StarForgeOS repo (owner/name)"
+        required: false
+        default: "SpencerGraffunder/StarForgeOS"
+      starforgeos_ref:
+        description: "StarForgeOS branch/tag/commit to build"
+        required: false
+        default: "nuclearcounter-dualboot"
+  push:
+    branches: [main, feat/dualboot]
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # ---- defaults overridable by workflow_dispatch inputs ----
+  STARFORGEOS_REPO: SpencerGraffunder/StarForgeOS
+  STARFORGEOS_REF: nuclearcounter-dualboot
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve StarForgeOS repo/ref
+        run: |
+          REPO="${{ github.event.inputs.starforgeos_repo || env.STARFORGEOS_REPO }}"
+          REF="${{ github.event.inputs.starforgeos_ref || env.STARFORGEOS_REF }}"
+          {
+            echo "SF_REPO=${REPO}"
+            echo "SF_REF=${REF}"
+          } >> "$GITHUB_ENV"
+          echo "StarForgeOS: ${REPO} @ ${REF}"
+
+      - name: Checkout NuclearCounter (this repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout StarForgeOS (build dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SF_REPO }}
+          ref: ${{ env.SF_REF }}
+          path: starforgeos
+          token: ${{ secrets.STARFORGEOS_TOKEN || github.token }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+            starforgeos/.pio
+          key: pio-${{ runner.os }}-${{ hashFiles('**/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO + esptool
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install platformio esptool pyserial
+
+      - name: Build NuclearCounter (HHZ) — V2.1 (C3) + V3.0 (S3)
+        run: |
+          pio run -e NuclearCounterV2_1
+          pio run -e NuclearCounterV3_0
+
+      - name: Build StarForgeOS — C3 + S3 (firmware + SPIFFS UI)
+        working-directory: starforgeos
+        run: |
+          pio run -e nuclearcounter
+          pio run -e nuclearcounter_s3
+          pio run -e nuclearcounter   -t buildfs
+          pio run -e nuclearcounter_s3 -t buildfs
+
+      - name: Package artifacts (v2.1 C3 + v3.0 S3)
+        run: |
+          set -euo pipefail
+
+          HHZ_C3=.pio/build/NuclearCounterV2_1
+          HHZ_S3=.pio/build/NuclearCounterV3_0
+          SF_C3=starforgeos/.pio/build/nuclearcounter
+          SF_S3=starforgeos/.pio/build/nuclearcounter_s3
+
+          # helper: assert a partitions.bin has ota_1 at the expected offset
+          check_ota1() { python3 tools/check_ota1.py "$1" "$2" "$3"; }
+
+          # ============================ v2.1 (C3) ============================
+          D=dist/v2.1-c3; rm -rf "$D"; mkdir -p "$D"
+          cp "$SF_C3/partitions.bin"   "$D/partitions.bin"     # C3 table (ota_1 @ 0x150000)
+          cp "$HHZ_C3/bootloader.bin"  "$D/bootloader.bin"
+          cp "$HHZ_C3/firmware.bin"    "$D/hertzhunter-ota0.bin"
+          cp "$SF_C3/firmware.bin"     "$D/starforge-ota1.bin"
+          cp "$SF_C3/spiffs.bin"       "$D/starforge-ui.bin"
+          check_ota1 "$D/partitions.bin" 0x150000 "v2.1-c3" # guards against the S3 table
+          cp tools/flash.sh "$D/flash.sh"; chmod +x "$D/flash.sh"
+          cat > "$D/manifest.txt" <<'EOF'
+          CHIP=esp32c3
+          OTA1_OFF=0x150000
+          UI_OFF=0x290000
+          EOF
+
+          # ============================ v3.0 (S3) ============================
+          D=dist/v3.0-s3; rm -rf "$D"; mkdir -p "$D"
+          cp "$HHZ_S3/partitions.bin"  "$D/partitions.bin"     # S3 table (ota_1 @ 0x1A0000)
+          cp "$HHZ_S3/bootloader.bin"  "$D/bootloader.bin"
+          cp "$HHZ_S3/firmware.bin"    "$D/hertzhunter-ota0.bin"
+          cp "$SF_S3/firmware.bin"     "$D/starforge-ota1.bin"
+          cp "$SF_S3/spiffs.bin"       "$D/starforge-ui.bin"
+          check_ota1 "$D/partitions.bin" 0x1A0000 "v3.0-s3"
+          cp tools/flash.sh "$D/flash.sh"; chmod +x "$D/flash.sh"
+          cat > "$D/manifest.txt" <<'EOF'
+          CHIP=esp32s3
+          OTA1_OFF=0x1A0000
+          UI_OFF=0x330000
+          EOF
+
+          echo "=== v2.1-c3 ==="; ls -la dist/v2.1-c3
+          echo "=== v3.0-s3 ==="; ls -la dist/v3.0-s3
+
+      - name: Upload v2.1 (C3) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclearcounter-v2.1-c3
+          path: dist/v2.1-c3
+          if-no-files-found: error
+
+      - name: Upload v3.0 (S3) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclearcounter-v3.0-s3
+          path: dist/v3.0-s3
+          if-no-files-found: error

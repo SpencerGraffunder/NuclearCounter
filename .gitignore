@@ -4,3 +4,6 @@ pcb/
 .vscode/
 # IDE generated
 compile_commands.json
+
+# local CI-artifact test output
+dist/

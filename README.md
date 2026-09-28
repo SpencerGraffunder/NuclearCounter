@@ -14,6 +14,7 @@ This is a fork of odddollar's Hertz-Hunter repo. The purpose of this fork is to 
     - [Environmental setup](#environment-setup)
     - [Firmware setup](#firmware-setup)
     - [Flashing](#flashing)
+    - [Building & flashing from CI (recommended)](#building--flashing-from-ci-recommended)
     - [Battery calibration](#battery-calibration)
 5. [Usage](#usage)
     - [Menus](#menus)
@@ -231,6 +232,44 @@ Click the `Upload` button to compile the firmware and upload it to the ESP32.
 > [!TIP]
 >
 > If you're getting errors during flashing, or the device doesn't appear, go to `Tools > USB CDC On Boot` and change it to `Enabled`. This allows the USB connection to remain active during boot, which can help with problems where the port isn't detected after the ESP32 reboots.
+
+### Building & flashing from CI (recommended)
+
+This repo has a GitHub Action (`.github/workflows/build.yml`) that builds **both** firmwares and packages a flash-ready artifact for each board, so you don't need a local toolchain or the StarForgeOS repo on hand:
+
+| Artifact | Board | Contents |
+|---|---|---|
+| `nuclearcounter-v2.1-c3` | ESP32-C3 (NuclearCounter V2.1) | Hertz Hunter (ota_0) + StarForgeOS (ota_1) + web UI + bootloader + partitions + `flash.sh` |
+| `nuclearcounter-v3.0-s3` | ESP32-S3 (NuclearCounter V3.0) | same set, S3 offsets |
+
+**1. Run the action**
+
+Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)** → **Run workflow**. It builds both chips and uploads the two artifacts above. (It also runs on push to `main`.)
+
+> [!NOTE]
+>
+> The action builds StarForgeOS from a fork: `SpencerGraffunder/StarForgeOS` @ branch `nuclearcounter-dualboot` (the branch with the `nuclearcounter` envs). Change the `starforgeos_repo` / `starforgeos_ref` inputs if you use a different fork/branch. Because the fork is public, no extra token is needed — if you ever point it at a *private* repo, add a read-only PAT to the repo secret `STARFORGEOS_TOKEN`.
+
+**2. Download the artifact for your board**
+
+On the run's summary page, download `nuclearcounter-v2.1-c3` (C3) or `nuclearcounter-v3.0-s3` (S3). Unzip it — you'll get the `.bin` files plus `flash.sh` and a `manifest.txt` (which records the chip and offsets).
+
+**3. Flash it**
+
+Plug the board in via USB, then run `flash.sh`. It auto-detects the serial port and flashes everything with esptool at the correct offsets:
+
+```bash
+./flash.sh                 # auto-detect port
+./flash.sh /dev/ttyACM0    # …or pass the port explicitly
+```
+
+> [!TIP]
+>
+> `flash.sh` installs `esptool` automatically if it's missing. The firmware is built with USB-CDC-on-boot, so the board auto-enters download mode on reset — no BOOT-button tapping needed. If your board doesn't auto-reset, hold **BOOT** while it connects and press **EN** to release.
+
+**4. After flashing**
+
+The board boots **Hertz Hunter** (ota_0). Switch to **StarForgeOS** from the Hertz Hunter menu (the ⭐ StarForge item), or back again from the StarForgeOS menu (Boot HertzHunter). StarForgeOS's web UI is served from its AP (e.g. `http://192.168.8.1/`) in standalone mode.
 
 ### Battery calibration
 

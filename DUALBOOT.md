@@ -63,6 +63,10 @@ esptool.py image-info .pio/build/<env>/firmware.bin | grep -i 'flash size'
 
 ## Flashing
 
+> [!TIP]
+>
+> **Easiest path:** run the **Build firmware (v2.1 C3 + v3.0 S3)** GitHub Action in this repo, download the `nuclearcounter-v2.1-c3` / `nuclearcounter-v3.0-s3` artifact, and run `flash.sh` inside it. See [README → Building & flashing from CI](README.md#building--flashing-from-ci-recommended). The manual steps below are what that artifact does for you.
+
 Build/flash Hertz Hunter first (this installs the bootloader, partition table
 and app):
 
