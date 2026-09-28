@@ -383,12 +383,16 @@ void Menu::drawScanMenu() {
 
 // Draw static content on about menu
 void Menu::drawAboutMenu() {
-  const char *info = "5.8GHz scanner";
-  u8g2.drawStr(xTextCentre(info, 7), 28, info);
+  u8g2.setFont(u8g2_font_7x13B_tf);
+  const char *name = "NuclearCounter";
+  u8g2.drawStr(xTextCentre(name, 7), 12, name);
 
-  u8g2.drawStr(xTextCentre(VERSION, 7), 44, VERSION);
+  u8g2.setFont(u8g2_font_7x13_tf);
+  u8g2.drawStr(xTextCentre(VERSION, 7), 30, VERSION);
 
-  u8g2.drawStr(xTextCentre(AUTHOR, 7), 60, AUTHOR);
+  u8g2.setFont(u8g2_font_5x7_tf);
+  u8g2.drawStr(xTextCentre(BASED_ON, 5), 46, BASED_ON);
+  u8g2.drawStr(xTextCentre(AUTHOR, 5), 56, AUTHOR);
 }
 
 // Draw static content on Wi-Fi menu
@@ -464,7 +468,7 @@ void Menu::initMenus() {
   calibrationMenuItems[1] = { "Calib. low", bitmap_WifiLow };
 
   // Menus
-  menus[0] = { "Hertz Hunter", mainMenuItems, 3, 0 };
+  menus[0] = { "NuclearCounter", mainMenuItems, 3, 0 };
   menus[1] = { "Scan", nullptr, MAX_FREQUENCIES_SCANNED, 0 };
   menus[2] = { "Settings", settingsMenuItems, 3, 0 };
   menus[3] = { "About", nullptr, 1, 0 };

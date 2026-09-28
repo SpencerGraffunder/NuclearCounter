@@ -1,11 +1,11 @@
-# Dual Boot: Hertz Hunter + StarForgeOS
+# Dual Boot: NuclearCounter + StarForgeOS
 
-The NuclearCounter (V2.0, V2.1, V3.0) can run **two independent firmwares** on
+The NuclearCounter board (V2.1, V3.0) can run **two independent firmwares** on
 the same board, switchable from each app's menu, with the selection surviving
 power cycles:
 
-- **Hertz Hunter** (this repo) — live nuclear rate counter
-- **StarForgeOS** (StarForge/StarForgeOS) — RotorHazard race node (USB or standalone WiFi)
+- **NuclearCounter** (this repo) — 5.8GHz scanner
+- **StarForgeOS** ([SpencerGraffunder/StarForgeOS](https://github.com/SpencerGraffunder/StarForgeOS)) — drone race timing (standalone Wi-Fi or RotorHazard USB node)
 
 Both apps live in separate OTA slots on the same 4MB flash. No reflashing and
 no mode pins needed to switch.
@@ -18,9 +18,13 @@ Flash layout (see `partitions.csv`):
 |-----------|---------|-----------|---------------------------|
 | `nvs`     | 0x9000  | 20 KB     | settings (per-app)        |
 | `otadata` | 0xE000  | 8 KB      | boot slot selection state |
-| `ota_0`   | 0x10000 | 1568 KB   | **Hertz Hunter**          |
+| `ota_0`   | 0x10000 | 1568 KB   | **NuclearCounter**        |
 | `ota_1`   | 0x1A0000| 1568 KB   | **StarForgeOS**           |
-| `spiffs`  | 0x330000| 800 KB    | (unused by both today)    |
+| `spiffs`  | 0x330000| 800 KB    | StarForgeOS web UI        |
+
+That's the S3 (V3.0) layout. The C3 (V2.1) board uses the same labels with
+smaller app slots: `ota_1` @ 0x150000 (1280 KB) and `spiffs` @ 0x290000
+(1408 KB) — see `partitions_dualboot_c3.csv` in the StarForgeOS fork.
 
 - Each app finds the *other* app's slot with
   `esp_partition_find_first(..., OTA_1/OTA_0, ...)` and switches with
@@ -46,7 +50,7 @@ This is set per-app by the board definition's `upload.flash_size`, **not** by
 `board_build.flash_size` in `platformio.ini` (which is ignored when a board
 file is present):
 
-- **Hertz Hunter** — `boards/esp32-s3-devkitc-1-4MB.json` (4 MB). ✓
+- **NuclearCounter** — `boards/esp32-s3-devkitc-1-4MB.json` (4 MB). ✓
 - **StarForgeOS** — `boards/esp32-s3-devkitc-1-4MB.json` (4 MB), selected via
   `board = esp32-s3-devkitc-1-4MB` in `[env:nuclearcounter_s3]`. ✓
 
@@ -67,7 +71,7 @@ esptool.py image-info .pio/build/<env>/firmware.bin | grep -i 'flash size'
 >
 > **Easiest path:** run the **Build firmware (v2.1 C3 + v3.0 S3)** GitHub Action in this repo, download the `nuclearcounter-v2.1-c3` / `nuclearcounter-v3.0-s3` artifact, and run `flash.sh` inside it. See [README → Building & flashing from CI](README.md#building--flashing-from-ci-recommended). The manual steps below are what that artifact does for you.
 
-Build/flash Hertz Hunter first (this installs the bootloader, partition table
+Build/flash NuclearCounter first (this installs the bootloader, partition table
 and app):
 
 ```sh
@@ -76,15 +80,21 @@ pio run -e NuclearCounterV3_0 -t upload
 
 # V2.1 (ESP32-C3)
 pio run -e NuclearCounterV2_1 -t upload
-
-# V2.0 (ESP32-C3, no SH1306)
-pio run -e NuclearCounterV2_0 -t upload
 ```
 
-Then build + flash StarForgeOS from the StarForgeOS repo (branch
-`nuclearcounter-dualboot`). PlatformIO always uploads apps to the `ota_0`
-offset, so the StarForgeOS repo ships a helper that writes the app to
-`ota_1` (0x1A0000) via esptool:
+> [!WARNING]
+>
+> The C3 env in this repo ships the **S3** partition table (a historical
+> quirk). For a C3 board the table must be the C3 one (`ota_1` @ 0x150000) —
+> the StarForgeOS C3 build provides it (`partitions_dualboot_c3.csv`), and the
+> CI artifact handles this automatically. The simplest path for C3 boards is
+> the CI artifact above.
+
+Then build + flash StarForgeOS from the fork
+([SpencerGraffunder/StarForgeOS](https://github.com/SpencerGraffunder/StarForgeOS),
+branch `main`). PlatformIO always uploads apps to the `ota_0`
+offset, so the fork ships a helper that writes the app to
+`ota_1` (0x1A0000 on S3, 0x150000 on C3) via esptool:
 
 ```sh
 cd StarForgeOS
@@ -98,7 +108,7 @@ identical** to this repo's `partitions.csv`.
 
 > Both apps must be flashed with the *same* partition table. If a flash
 > session fails halfway, the safest recovery is a full re-flash from the
-> Hertz Hunter side (always writes bootloader + table + app):
+> NuclearCounter side (always writes bootloader + table + app):
 >
 > ```sh
 > pio run -e <env> -t upload
@@ -107,18 +117,14 @@ identical** to this repo's `partitions.csv`.
 
 ## Switching apps
 
-### Hertz Hunter → StarForge
+### NuclearCounter → StarForge
 
-Main menu → **StarForge** → confirm.
+Main menu → hold `SEL` (hidden **Advanced** submenu) → ⭐ **StarForge** → confirm.
 
-### StarForge → Hertz Hunter
+### StarForge → NuclearCounter
 
-Standalone mode only (boot with the select button **held**):
-OLED menu → **Boot HertzHunter** → select to confirm.
-
-> In RotorHazard USB node mode (select button released at boot) the OLED is
-> not used and there is no menu — that mode is reserved for the USB lap
-> timer. To switch out of it, hold the select button and power-cycle.
+OLED menu (available in both standalone and USB node modes) →
+**Boot Scanner Mode** → select to confirm.
 
 ## Buttons (StarForge standalone menu)
 
@@ -128,7 +134,8 @@ OLED menu → **Boot HertzHunter** → select to confirm.
 | Next    | 10          | menu down       |
 | Select  | 20          | activate / confirm |
 
-Same wiring and behavior as Hertz Hunter (active-high with `INPUT_PULLDOWN`).
+Same wiring and behavior as the NuclearCounter firmware (active-high with
+`INPUT_PULLDOWN`).
 
 ## Troubleshooting
 
@@ -136,7 +143,7 @@ Same wiring and behavior as Hertz Hunter (active-high with `INPUT_PULLDOWN`).
   flash-size mismatch. The app you're switching *from* was built for a different
   flash size than the board (e.g. 8 MB default vs 4 MB board). Rebuild it for
   4 MB and re-flash both apps (see ⚠️ note above). This is the single most
-  common cause of "StarForge can't boot Hertz Hunter" / vice-versa.
+  common cause of "StarForgeOS can't boot NuclearCounter" / vice-versa.
 - **Black screen after switching:** the app in the other slot is missing or
   corrupt. Re-flash it (see above).
 - **Wrong chip error on upload:** check you're flashing the right env for the

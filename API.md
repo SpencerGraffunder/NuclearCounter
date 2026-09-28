@@ -1,6 +1,6 @@
-# API Documentation for Hertz Hunter
+# API Documentation for NuclearCounter
 
-Hertz Hunter provides an API accessible from a Wi-Fi hotspot for the purpose of connecting the device to other software. The required schema for interacting with this API is documented here, and it includes the following features:
+NuclearCounter provides an API accessible from a Wi-Fi hotspot for the purpose of connecting the device to other software. The required schema for interacting with this API is documented here, and it includes the following features:
 
 - Requesting the current battery voltage
 - Requesting up-to-date RSSI data

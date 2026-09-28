@@ -4,7 +4,7 @@
 #   nuclearcounter-v3.0-s3   ->  ESP32-S3 board (NuclearCounter V3.0)
 #
 # Each artifact is a complete dual-boot flash package:
-#   Hertz Hunter  -> ota_0 (0x10000)
+#   NuclearCounter -> ota_0 (0x10000)
 #   StarForgeOS   -> ota_1 (0x150000 on C3 / 0x1A0000 on S3)
 #   StarForgeOS web UI -> spiffs (0x290000 on C3 / 0x330000 on S3)
 #   + bootloader.bin + partitions.bin + flash.sh
@@ -29,7 +29,7 @@ on:
       starforgeos_ref:
         description: "StarForgeOS branch/tag/commit to build"
         required: false
-        default: "nuclearcounter-dualboot"
+        default: "main"
   push:
     branches: [main, feat/dualboot]
 
@@ -40,7 +40,7 @@ concurrency:
 env:
   # ---- defaults overridable by workflow_dispatch inputs ----
   STARFORGEOS_REPO: SpencerGraffunder/StarForgeOS
-  STARFORGEOS_REF: nuclearcounter-dualboot
+  STARFORGEOS_REF: main
 
 jobs:
   build:
@@ -89,7 +89,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install platformio esptool pyserial
 
-      - name: Build NuclearCounter (HHZ) — V2.1 (C3) + V3.0 (S3)
+      - name: Build NuclearCounter — V2.1 (C3) + V3.0 (S3)
         run: |
           pio run -e NuclearCounterV2_1
           pio run -e NuclearCounterV3_0
@@ -106,8 +106,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          HHZ_C3=.pio/build/NuclearCounterV2_1
-          HHZ_S3=.pio/build/NuclearCounterV3_0
+          NC_C3=.pio/build/NuclearCounterV2_1
+          NC_S3=.pio/build/NuclearCounterV3_0
           SF_C3=starforgeos/.pio/build/nuclearcounter
           SF_S3=starforgeos/.pio/build/nuclearcounter_s3
 
@@ -117,8 +117,8 @@ jobs:
           # ============================ v2.1 (C3) ============================
           D=dist/v2.1-c3; rm -rf "$D"; mkdir -p "$D"
           cp "$SF_C3/partitions.bin"   "$D/partitions.bin"     # C3 table (ota_1 @ 0x150000)
-          cp "$HHZ_C3/bootloader.bin"  "$D/bootloader.bin"
-          cp "$HHZ_C3/firmware.bin"    "$D/hertzhunter-ota0.bin"
+          cp "$NC_C3/bootloader.bin"  "$D/bootloader.bin"
+          cp "$NC_C3/firmware.bin"    "$D/nuclearcounter-ota0.bin"
           cp "$SF_C3/firmware.bin"     "$D/starforge-ota1.bin"
           cp "$SF_C3/spiffs.bin"       "$D/starforge-ui.bin"
           check_ota1 "$D/partitions.bin" 0x150000 "v2.1-c3" # guards against the S3 table
@@ -131,9 +131,9 @@ jobs:
 
           # ============================ v3.0 (S3) ============================
           D=dist/v3.0-s3; rm -rf "$D"; mkdir -p "$D"
-          cp "$HHZ_S3/partitions.bin"  "$D/partitions.bin"     # S3 table (ota_1 @ 0x1A0000)
-          cp "$HHZ_S3/bootloader.bin"  "$D/bootloader.bin"
-          cp "$HHZ_S3/firmware.bin"    "$D/hertzhunter-ota0.bin"
+          cp "$NC_S3/partitions.bin"  "$D/partitions.bin"     # S3 table (ota_1 @ 0x1A0000)
+          cp "$NC_S3/bootloader.bin"  "$D/bootloader.bin"
+          cp "$NC_S3/firmware.bin"    "$D/nuclearcounter-ota0.bin"
           cp "$SF_S3/firmware.bin"     "$D/starforge-ota1.bin"
           cp "$SF_S3/spiffs.bin"       "$D/starforge-ui.bin"
           check_ota1 "$D/partitions.bin" 0x1A0000 "v3.0-s3"

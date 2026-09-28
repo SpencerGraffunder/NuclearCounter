@@ -8,7 +8,7 @@
 #
 #     bootloader.bin         0x0
 #     partitions.bin         0x8000
-#     hertzhunter-ota0.bin   ota_0  (Hertz Hunter)
+#     nuclearcounter-ota0.bin  ota_0  (NuclearCounter)
 #     starforge-ota1.bin     ota_1  (StarForgeOS)
 #     starforge-ui.bin       spiffs (StarForgeOS web UI)
 #
@@ -38,7 +38,7 @@ done < manifest.txt
 [ -n "$UI_OFF" ]   || { echo "ERROR: manifest.txt missing UI_OFF" >&2; exit 1; }
 
 # ------------------------------------------------------------------- files
-for f in bootloader.bin partitions.bin hertzhunter-ota0.bin starforge-ota1.bin starforge-ui.bin; do
+for f in bootloader.bin partitions.bin nuclearcounter-ota0.bin starforge-ota1.bin starforge-ui.bin; do
   [ -f "$f" ] || { echo "ERROR: missing $f" >&2; exit 1; }
 done
 
@@ -56,7 +56,7 @@ fi
 echo "============================================================"
 echo " Chip        : $CHIP"
 echo " Port        : $PORT"
-echo " ota_0 (HHZ) : 0x10000"
+echo " ota_0 (NC)  : 0x10000"
 echo " ota_1 (SFOS): $OTA1_OFF"
 echo " UI (spiffs) : $UI_OFF"
 echo "============================================================"
@@ -78,11 +78,11 @@ esptool --chip "$CHIP" --port "$PORT" --baud 921600 \
   write_flash \
   0x0      bootloader.bin \
   0x8000   partitions.bin \
-  0x10000  hertzhunter-ota0.bin \
+  0x10000  nuclearcounter-ota0.bin \
   "$OTA1_OFF" starforge-ota1.bin \
   "$UI_OFF"   starforge-ui.bin
 
 echo ""
-echo "Done. The board boots Hertz Hunter (ota_0) after a fresh flash."
-echo "Switch to StarForgeOS from the Hertz Hunter menu (StarForge item),"
-echo "or back from the StarForgeOS menu (Boot HertzHunter)."
+echo "Done. The board boots NuclearCounter (ota_0) after a fresh flash."
+echo "Switch to StarForgeOS from the NuclearCounter menu (Advanced > StarForge),"
+echo "or back from the StarForgeOS menu (Boot Scanner Mode)."

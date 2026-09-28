@@ -1,35 +1,8 @@
 # NuclearCounter
 
-This is a fork of odddollar's Hertz-Hunter repo. The purpose of this fork is to convert the build environment from the Arduino IDE to PlatformIO and make any necessary changes for the NuclearCounter hardware.
+A poor-man's [RF Explorer](https://j3.rf-explorer.com/) for FPV drones — a cheap, DIY 5.8GHz spectrum scanner that shows which frequencies are in use, where background noise is occurring, and helps diagnose malfunctioning video transmitters (VTXs). Designed to be cheap (<$60 AUD) and easy to build yourself.
 
-## Contents
-
-1. [Introduction](#introduction)
-2. [Features](#features)
-    - [Potential future features](#potential-future-features)
-3. [Hardware](#hardware)
-    - [Components](#components)
-    - [Wiring](#wiring)
-4. [Software](#software)
-    - [Environmental setup](#environment-setup)
-    - [Firmware setup](#firmware-setup)
-    - [Flashing](#flashing)
-    - [Building & flashing from CI (recommended)](#building--flashing-from-ci-recommended)
-    - [Battery calibration](#battery-calibration)
-5. [Usage](#usage)
-    - [Menus](#menus)
-    - [Scanning](#scanning)
-    - [Wi-Fi hotspot](#wi-fi-hotspot)
-    - [RSSI calibration](#rssi-calibration)
-    - [Resetting](#resetting)
-
-## Introduction
-
-A poor-man's [RF Explorer](https://j3.rf-explorer.com/) for FPV drones. Useful for quickly determining which frequencies are in use, where background noise is occurring, and diagnosing malfunctioning video transmitters (VTXs). Designed to be cheap (<$60 AUD) and easy to build yourself.
-
-At a racing event I attended there was an issue with someone's damaged VTX broadcasting at full power on two channels, thus interfering with another pilot. A spectrum analyser was essential for diagnosing this issue, as two peaks at different frequencies could be seen in the spectrum graph when only the damaged VTX was powered on.
-
-This project aims to make this useful tool more accessible to pilots and race organisers, and can be easily added to a race-day tool bag. It uses a common RX5808 video receiver to scan from 5645MHz to 5945MHz (and 5345MHz to 5645MHz for low-band channels) and displays a graph of the received signal strength (RSSI) on different frequencies within this range on a small OLED display.
+The NuclearCounter board also **dual-boots** [StarForgeOS](https://github.com/RaceFPV/StarForgeOS) (a drone race timing system), so one board is both a scanner and a race timer.
 
 *Example of a soldered prototype*
 
@@ -38,6 +11,47 @@ This project aims to make this useful tool more accessible to pilots and race or
     <img src="./images/Scan example.jpg" alt="Scan example" width="40%" />
 </div>
 
+## Contents
+
+1. [Introduction](#introduction)
+2. [Fork & credits](#fork--credits)
+3. [Features](#features)
+    - [Potential future features](#potential-future-features)
+4. [Hardware](#hardware)
+    - [Components](#components)
+    - [Wiring](#wiring)
+5. [Software](#software)
+    - [Environment setup](#environment-setup)
+    - [Building & flashing](#building--flashing)
+    - [Building & flashing from CI (recommended)](#building--flashing-from-ci-recommended)
+    - [Dual boot with StarForgeOS](#dual-boot-with-starforgeos)
+    - [Battery calibration](#battery-calibration)
+6. [Usage](#usage)
+    - [Menus](#menus)
+    - [Scanning](#scanning)
+    - [Wi-Fi hotspot](#wi-fi-hotspot)
+    - [RSSI calibration](#rssi-calibration)
+    - [Resetting](#resetting)
+
+## Introduction
+
+At a racing event I attended there was an issue with someone's damaged VTX broadcasting at full power on two channels, thus interfering with another pilot. A spectrum analyser was essential for diagnosing this issue, as two peaks at different frequencies could be seen in the spectrum graph when only the damaged VTX was powered on.
+
+This project aims to make this useful tool more accessible to pilots and race organisers, and can be easily added to a race-day tool bag. It uses a common RX5808 video receiver to scan from 5645MHz to 5945MHz (and 5345MHz to 5645MHz for low-band channels) and displays a graph of the received signal strength (RSSI) on different frequencies within this range on a small OLED display.
+
+## Fork & credits
+
+The NuclearCounter firmware is a fork of [Hertz Hunter](https://github.com/odddollar/Hertz-Hunter) by **Simon Eason** (odddollar). All of the original functionality and design is retained, and credit for the original project remains with its author.
+
+Changes made in this fork:
+
+| Area | Change |
+|---|---|
+| Build environment | Migrated from the Arduino IDE to PlatformIO |
+| Boards | Build targets for the NuclearCounter **V2.1** (ESP32-C3) and **V3.0** (ESP32-S3) hardware |
+| Dual boot | The board can also run [StarForgeOS](https://github.com/RaceFPV/StarForgeOS) (drone race timing) from a second OTA slot, with boot switching from either firmware's menu — see [Dual boot with StarForgeOS](#dual-boot-with-starforgeos) |
+| Wi-Fi | AP renamed to `NuclearCounter` (password `nuclearcounter`), moved to the `192.168.8.x` subnet, and a TX-power fix added so the S3's AP beacon transmits reliably |
+| CI | A GitHub Action builds **both** firmwares and packages a flash-ready artifact per board — see below |
 
 ## Features
 
@@ -53,6 +67,7 @@ This project aims to make this useful tool more accessible to pilots and race or
 - Displaying calibrated signal strength for the selected frequency
 - Settings saved between reboots
 - API accessible from a Wi-Fi hotspot for integration with other software ([Documentation](API.md))
+- **Dual boot with StarForgeOS** — a race-timing firmware on the same board, switchable from either menu ([details](#dual-boot-with-starforgeos))
 
 ### Potential future features
 
@@ -73,7 +88,7 @@ These components can be connected together on a bread-board or soldered more per
 - 1x [ESP32-C3 Super Mini](https://www.aliexpress.com/w/wholesale-esp32-c3-super-mini.html) (<$5)
 - 1x [RX5808 with SPI mod](https://www.aliexpress.com/w/wholesale-rx5808-spi.html) (\$25 to \$50 depending on the seller)
 - 1x [1.3" I<sup>2</sup>C 128x64 OLED](https://www.aliexpress.com/w/wholesale-1.3-oled.html) (<$5)
-    - I use an OLED with the SH1106 controller chip, but the SSD1306 chip *should* work as well. The modifications that need to be made to the source code are explained at the end of [Firmware setup](#firmware-setup)
+    - I use an OLED with the SH1106 controller chip, but the SSD1306 chip *should* work as well. The modifications that need to be made to the source code are explained at the end of [Building & flashing](#building--flashing)
 - 1x [Active 3.3V buzzer](https://www.aliexpress.com/w/wholesale-active-buzzer.html) (<$3)
 - 1x [TP4056 lithium battery charger module](https://zaitronics.com.au/products/tp4056-type-c-18650-lithium-battery-charger-protection) (<$2)
 - 1x [5V boost converter](https://zaitronics.com.au/products/mt3608-step-up-module) (<$3)
@@ -95,74 +110,17 @@ These components can be connected together on a bread-board or soldered more per
 
 ### Environment setup
 
-**1. Install the Arduino IDE**
+**1. Install PlatformIO**
 
-Download the [Arduino IDE](https://www.arduino.cc/) and install it.
+Either the [PlatformIO IDE extension](https://platformio.org/install/integration) (VS Code recommended) or the [PlatformIO Core CLI](https://docs.platformio.org/en/latest/core/index.html):
 
-**2. Update `Additional boards manager URLs`**
-
-The ESP32 board used in this project isn't supported out-of-the-box by the Arduino IDE, so it needs to be added manually.
-
-In the Arduino IDE, open `File > Preferences`, and in the `Additional boards manager URLs` field, paste the following, then click `OK`:
-
-```
-https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+```bash
+pip install platformio
 ```
 
-This will update the list that the Arduino IDE checks to know where to install additional boards from, but doesn't actually install the board. 
+That's it — the ESP32 board support and libraries are installed automatically on the first build.
 
-**3. Install ESP32 support**
-
-Go to `Tools > Board > Boards Manager` and search for `ESP32`. Install the one by `Espressif Systems`.
-
-<div align="center">
-    <img src="./images/Board installation.png" alt="Board installation" />
-</div>
-
-**4. Install required libraries**
-
-Go to `Tools > Manage Libraries`, then search for and install the following libraries:
-
-- `U8G2` by `oliver <olikraus@gmail.com>`
-- `ESP Async WebServer` by `ESP32Async`
-- `Async TCP` by `ESP32Async`
-- `ArduinoJson` by `Benoit Blanchon <blog.benoitblanchon.fr>`
-
-<div align="center">
-    <img src="./images/U8g2.png" alt="U8g2" />
-</div>
-
-### Firmware setup
-
-**1. Download firmware**
-
-On GitHub, under `Releases`, click the most recent version.
-
-<div align="center">
-    <img src="./images/Releases.png" alt="Releases" />
-</div>
-
-Under `Assets`, click the `Source code (zip)` link to download the firmware.
-
-<div align="center">
-    <img src="./images/Assets.png" alt="Assets" />
-</div>
-
-**2. Open firmware in Arduino IDE**
-
-Unzip the downloaded file. You should see the project files within. Open the folder named `main`, which contains all the source code files for the firmware.
-
-<div align="center">
-    <img src="./images/Files.png" alt="Files" />
-</div>
-
-Double click `main.ino`, which should open in the Arduino IDE, along with the rest of the source code files.
-
-<div align="center">
-    <img src="./images/IDE.png" alt="IDE" width="80%" />
-</div>
-
-**3. (If necessary) Change display chip being used**
+**2. (If necessary) Change display chip being used**
 
 > [!IMPORTANT]
 >
@@ -188,50 +146,50 @@ Below this line there should be:
 
 Add `//` to the front of the first line and remove it from the front of the second line.
 
-**4. (If necessary) Change SSID and password for Wi-Fi hotspot**
+**3. (If necessary) Change SSID and password for the Wi-Fi hotspot**
 
 > [!IMPORTANT]
 >
-> This step is only necessary if the default SSID `Hertz Hunter` and password `hertzhunter` isn't suitable for your use case. The Wi-Fi hotspot is only used for web-based interactions with the device, such as accessing the API.
+> This step is only necessary if the default SSID `NuclearCounter` and password `nuclearcounter` isn't suitable for your use case. The Wi-Fi hotspot is only used for web-based interactions with the device, such as accessing the API.
 
-Open `api.h` and find the following lines:
+In `platformio.ini`, the active build environment defines:
 
-```cpp
-#define WIFI_SSID "Hertz Hunter"
-#define WIFI_PASSWORD "hertzhunter"
+```ini
+-D WIFI_SSID=\"NuclearCounter\"
+-D WIFI_PASSWORD=\"nuclearcounter\"
 ```
 
 Change these values to whatever you want, but note that text that is too long will run off the screen on the Wi-Fi menu.
 
-### Flashing
+### Building & flashing
 
-**1. Connect ESP32**
+**1. Connect the board**
 
-Plug the ESP32 module into the computer with a USB-C cable.
+Plug the board in with a USB-C cable. The firmware is built with USB-CDC-on-boot, so a serial port appears automatically — no BOOT-button tapping needed.
 
-**2. Select board**
+**2. Build**
 
-Go to `Tools > Board > esp32` and select `ESP32C3 Dev Module`. 
+`platformio.ini` has one build environment per board:
 
-**3. Select port**
+| Environment | Board |
+|---|---|
+| `NuclearCounterV2_1` | ESP32-C3 (NuclearCounter V2.1) |
+| `NuclearCounterV3_0` | ESP32-S3 (NuclearCounter V3.0) |
 
-Go to `Tools > Port` and select the port the ESP32 is plugged into.
+```bash
+pio run -e NuclearCounterV3_0          # build
+pio run -e NuclearCounterV2_1          # …or the C3 board
+```
 
-<div align="center">
-    <img src="./images/Port selection.png" alt="Port selection" />
-</div>
+**3. Flash**
 
-**4. Compile and upload firmware**
-
-Click the `Upload` button to compile the firmware and upload it to the ESP32.
-
-<div align="center">
-    <img src="./images/Upload.png" alt="Upload" />
-</div>
+```bash
+pio run -e NuclearCounterV3_0 -t upload
+```
 
 > [!TIP]
 >
-> If you're getting errors during flashing, or the device doesn't appear, go to `Tools > USB CDC On Boot` and change it to `Enabled`. This allows the USB connection to remain active during boot, which can help with problems where the port isn't detected after the ESP32 reboots.
+> If the board doesn't appear, hold **BOOT** while it connects and press **EN** to release (forces download mode).
 
 ### Building & flashing from CI (recommended)
 
@@ -239,7 +197,7 @@ This repo has a GitHub Action (`.github/workflows/build.yml`) that builds **both
 
 | Artifact | Board | Contents |
 |---|---|---|
-| `nuclearcounter-v2.1-c3` | ESP32-C3 (NuclearCounter V2.1) | Hertz Hunter (ota_0) + StarForgeOS (ota_1) + web UI + bootloader + partitions + `flash.sh` |
+| `nuclearcounter-v2.1-c3` | ESP32-C3 (NuclearCounter V2.1) | NuclearCounter (ota_0) + StarForgeOS (ota_1) + web UI + bootloader + partitions + `flash.sh` |
 | `nuclearcounter-v3.0-s3` | ESP32-S3 (NuclearCounter V3.0) | same set, S3 offsets |
 
 **1. Run the action**
@@ -248,7 +206,7 @@ Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)
 
 > [!NOTE]
 >
-> The action builds StarForgeOS from a fork: `SpencerGraffunder/StarForgeOS` @ branch `nuclearcounter-dualboot` (the branch with the `nuclearcounter` envs). Change the `starforgeos_repo` / `starforgeos_ref` inputs if you use a different fork/branch. Because the fork is public, no extra token is needed — if you ever point it at a *private* repo, add a read-only PAT to the repo secret `STARFORGEOS_TOKEN`.
+> The action builds StarForgeOS from a fork: `SpencerGraffunder/StarForgeOS` @ branch `main`. Change the `starforgeos_repo` / `starforgeos_ref` inputs if you use a different fork/branch. Because the fork is public, no extra token is needed — if you ever point it at a *private* repo, add a read-only PAT to the repo secret `STARFORGEOS_TOKEN`.
 
 **2. Download the artifact for your board**
 
@@ -269,7 +227,25 @@ Plug the board in via USB, then run `flash.sh`. It auto-detects the serial port 
 
 **4. After flashing**
 
-The board boots **Hertz Hunter** (ota_0). Switch to **StarForgeOS** from the Hertz Hunter menu (the ⭐ StarForge item), or back again from the StarForgeOS menu (Boot HertzHunter). StarForgeOS's web UI is served from its AP (e.g. `http://192.168.8.1/`) in standalone mode.
+The board boots **NuclearCounter** (ota_0). Switch to **StarForgeOS** from the NuclearCounter menu (the ⭐ StarForge item in the hidden Advanced submenu), or back again from the StarForgeOS menu (**Boot Scanner Mode**). StarForgeOS's web UI is served from its AP (e.g. `http://192.168.8.1/`) in standalone mode.
+
+### Dual boot with StarForgeOS
+
+The NuclearCounter board runs two firmwares in two OTA slots:
+
+| Slot | Firmware | Role |
+|---|---|---|
+| `ota_0` | **NuclearCounter** (this firmware) | 5.8GHz scanner |
+| `ota_1` | [StarForgeOS](https://github.com/RaceFPV/StarForgeOS) (fork: [SpencerGraffunder/StarForgeOS](https://github.com/SpencerGraffunder/StarForgeOS)) | Drone race timing (standalone with Wi-Fi, or RotorHazard USB node) |
+
+Key points:
+
+- **Switching** is done from the OLED menu: the Advanced submenu (hold `SEL` on the main menu) has a ⭐ **StarForge** item that boots StarForgeOS, and the StarForgeOS menu has a **Boot Scanner Mode** item that boots this firmware. The selection survives power loss (stored in the `otadata` partition).
+- **Shared hardware, shared settings** — both firmwares use the same buttons, OLED, buzzer, and battery. Buzzer on/off and the low-battery alarm threshold are configured in *this* firmware's menu (Settings) and are read by StarForgeOS from the shared NVS store, so one configuration covers both.
+- **StarForgeOS standalone mode** serves a web UI from its Wi-Fi AP (`192.168.8.1`): live RSSI graph, lap list, stats, and race controls.
+- The S3 board's Wi-Fi AP needs the TX-power fix (`esp_wifi_set_max_tx_power(20)`), which is already in the firmware; the AP SSID is `SFOS-<last 6 hex of MAC>` (open network) in StarForgeOS.
+
+Full partition layout, manual esptool flashing, and troubleshooting (including the 4MB/8MB flash-size gotcha) are documented in [DUALBOOT.md](DUALBOOT.md).
 
 ### Battery calibration
 
@@ -300,7 +276,7 @@ The menu items can be navigated between with `PREV` and `NEXT`, and once the des
 
 This is the initial menu displayed when the device is powered on. It displays the options to navigate to the `Scan` menu, `Settings` submenus, `About` menu, and a hidden `Advanced` submenu. The current battery voltage is also displayed in the bottom right.
 
-The hidden `Advanced` submenu can be accessed by pressing and holding `SEL`.
+The hidden `Advanced` submenu can be accessed by pressing and holding `SEL`. It contains the `Wi-Fi` and `Calibration` menus, plus the ⭐ **StarForge** item, which reboots the board into the dual-booted StarForgeOS firmware.
 
 **Scan**
 
@@ -310,7 +286,7 @@ This menu is where the graph of the scanned RSSI values is displayed and is cove
 
 Set the interval at which the spectrum will be scanned. A lower scan interval means that more frequencies are scanned, at the cost of taking longer to complete a full refresh, as each frequency takes about 30ms to scan. A higher scan interval means that fewer frequencies are scanned, but a full refresh is significantly faster.
 
-Across the 300MHz spectrum being scanned (5645MHz to 5945Hz, and 5345MHz to 5645MHz):
+Across the 300MHz spectrum being scanned (5645MHz to 5945MHz, and 5345MHz to 5645MHz):
 
 - `5MHz` scans 61 frequencies every 5MHz
     - $(300/5)+1$ to also include the final frequency
@@ -323,19 +299,19 @@ The currently set option is displayed with the <img src="./icons/Selected.png" a
 
 **Buzzer**
 
-Enable or disable the single beep that sounds on pressing a button, and the double beep that sounds on going back. This option doesn't affect the double beep on boot, nor the low battery alarm. These will always sound.
+Enable or disable the single beep that sounds on pressing a button, and the double beep that sounds on going back. This option doesn't affect the double beep on boot, nor the low battery alarm. These will always sound. The setting is shared with StarForgeOS via the NVS store (see [Dual boot with StarForgeOS](#dual-boot-with-starforgeos)).
 
 The currently set option is displayed with the <img src="./icons/Selected.png" alt="Selected" /> icon.
 
 **Battery alarm**
 
-Set the voltage that the low battery alarm will go off at.
+Set the voltage that the low battery alarm will go off at. The setting is shared with StarForgeOS via the NVS store (see [Dual boot with StarForgeOS](#dual-boot-with-starforgeos)).
 
 The currently set option is displayed with the <img src="./icons/Selected.png" alt="Selected" /> icon.
 
 **About**
 
-Displays information about the device, such as the current firmware version and the creator's name.
+Displays information about the device: the firmware name, current version, and credits — NuclearCounter is based on Hertz Hunter by Simon Eason.
 
 **Wi-Fi**
 
@@ -363,11 +339,11 @@ In combination with the frequency markings along the bottom of the screen, this 
 
 ### Wi-Fi hotspot
 
-The Wi-Fi hotspot is provided as a means of accessing additional features through a web-based interface. Currently this includes an API that allows Hertz Hunter to be integrated into other software, thus greatly extending the functionality beyond just the physical device.
+The Wi-Fi hotspot is provided as a means of accessing additional features through a web-based interface. Currently this includes an API that allows NuclearCounter to be integrated into other software, thus greatly extending the functionality beyond just the physical device.
 
 The hotspot is started when the `Wi-Fi` menu is selected, and is stopped when this menu is exited. When the hotspot is running, the device scans the RF spectrum as it would when viewing the `Scan` menu, however it does it in the background and doesn't draw a graph on the display.
 
-On this menu the configured SSID and password for the hotspot is displayed, which can be connected to from another device, such as a phone or computer. The IP is the address of the Hertz Hunter device and is where all requests should be sent to. The documentation for the API is available [here](API.md), and currently includes the following features:
+On this menu the configured SSID and password for the hotspot is displayed (default: `NuclearCounter` / `nuclearcounter`), which can be connected to from another device, such as a phone or computer. The IP is the address of the NuclearCounter device (`192.168.8.1`) and is where all requests should be sent to. The documentation for the API is available [here](API.md), and currently includes the following features:
 
 - Requesting the current battery voltage
 - Requesting up-to-date RSSI data
@@ -407,3 +383,6 @@ The signal strength readout will display `100%` for any RSSI that is at or highe
 
 Due to the fact that the settings and calibration values are stored in non-volatile memory, flashing the firmware again won't wipe them. If, for some reason, the device needs to be completely reset, press `PREV`, `SEL` and `NEXT` simultaneously. The device should reboot with everything completely wiped and reset.
 
+> [!CAUTION]
+>
+> On a dual-booted board this also clears the settings shared with StarForgeOS (buzzer on/off, battery alarm threshold). It does **not** erase the StarForgeOS app itself — that lives in the `ota_1` partition, not in NVS.

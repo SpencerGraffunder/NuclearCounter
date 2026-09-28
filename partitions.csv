@@ -1,6 +1,6 @@
 # Dual-boot partition table (4MB flash, shared by all NuclearCounter targets)
 #
-# ota_0 = Hertz Hunter (this project), ota_1 = StarForgeOS. The stock
+# ota_0 = NuclearCounter (this project), ota_1 = StarForgeOS. The stock
 # Espressif bootloader + otadata partition implement dual boot: an app
 # switches boot targets with esp_ota_set_boot_partition() + esp_restart(),
 # and power-cycling boots the last-selected app.
