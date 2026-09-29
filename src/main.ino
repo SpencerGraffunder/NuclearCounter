@@ -29,6 +29,7 @@ void setup() {
   // Setup serial for debugging
   Serial.begin(115200);
   delay(150);
+  Serial.println("NC-TRACE: setup start");
 
   // Load settings from non-volatile memory
   settings.loadSettingsStorage();

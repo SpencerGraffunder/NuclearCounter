@@ -6,8 +6,13 @@ const T& clamp(const T& value, const T& low, const T& high) {
     return (value < low) ? low : (value > high) ? high : value;
 }
 
+// TEMP (OTA bring-up): boot straight to the Wi-Fi page so the AP is up
+  // without needing a person at the board to navigate hold-SELECT -> Wi-Fi.
+  // The WIFI draw case calls api->startWifi(). REMOVE before shipping.
+#define BOOT_MENU WIFI  // was MAIN
+
 Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, Api *a)
-  : menuIndex(MAIN),
+  : menuIndex(BOOT_MENU),
     previous_pin(p_p), select_pin(s_p), next_pin(n_p),
     selectButtonPressTime(0), selectButtonHeld(false),
     settings(s), buzzer(b), module(r), api(a),
@@ -185,8 +190,10 @@ void Menu::sendBuffer() {
 
 // Draw current menu
 void Menu::drawMenu() {
-  // Draw title, but not for scan menu
-  if (menuIndex != SCAN) {
+  // Draw title, but not for scan menu or about (the about screen draws its
+  // own "NuclearCounter" header at the same position — drawing the generic
+  // title too made the two texts overlap)
+  if (menuIndex != SCAN && menuIndex != ABOUT) {
     u8g2.setFont(u8g2_font_8x13B_tf);
     const char *title = menus[menuIndex].title;
     u8g2.drawStr(xTextCentre(title, 8), 13, title);

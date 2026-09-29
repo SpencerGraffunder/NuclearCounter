@@ -8,6 +8,7 @@
 #include "battery.h"
 #include "RX5808.h"
 #include "settings.h"
+#include "ota.h"
 
 // 192.168.8.x (NOT 192.168.4.x) — 192.168.4.x collides with the home
 // network (DeerFiber 192.168.4.0/22) and breaks the Mac's routing to it.
@@ -34,6 +35,7 @@ private:
   bool wifiOn;
 
   AsyncWebServer server;
+  OtaUpdater ota;
 
   Settings *settings;
   RX5808 *module;

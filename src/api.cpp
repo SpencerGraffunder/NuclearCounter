@@ -43,6 +43,9 @@ Api::Api(Settings *s, RX5808 *r, Battery *b)
     [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
       handlePostCalibration(request, data, len, index, total);
     });
+
+  // OTA: update the StarForgeOS slot over WiFi (+ minimal web page)
+  ota.begin(&server);
 }
 
 // Start wifi hotspot
@@ -50,20 +53,36 @@ void Api::startWifi() {
   // Do nothing if wifi already on
   if (wifiOn) return;
 
+  // Mirror the StarForgeOS AP init sequence (verified visible on both
+  // C3 and S3 hardware): explicit AP mode, modem sleep OFF (with sleep on
+  // the AP's RF powers down between beacon windows and scanners never
+  // catch a beacon), static IP, then max TX power, then start on an
+  // explicit channel.
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+
   // Set static ip
   IPAddress ip, gateway, subnet;
   ip.fromString(WIFI_IP);
   gateway.fromString(WIFI_IP);
   subnet.fromString(WIFI_SUBNET);
-  WiFi.softAPConfig(ip, gateway, subnet);
+  bool cfg = WiFi.softAPConfig(ip, gateway, subnet);
+  delay(200);
 
-  // Force MAX TX power (20 dBm). On the S3 board the default max TX power
-  // is unset (reports 80 dBm = invalid) and the beacon is too weak to be
-  // seen by nearby clients. Setting it explicitly makes the AP visible.
-  esp_wifi_set_max_tx_power(20);
+  // Force MAX TX power (20 dBm). Must be set after WiFi.mode() and before
+  // softAP() to take effect.
+  esp_err_t tx = esp_wifi_set_max_tx_power(20);
+  int8_t tx_read = -127; esp_wifi_get_max_tx_power(&tx_read);
 
-  WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
+  bool ap = WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, 1, 0, 4);
+  esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11N);
   server.begin();
+
+  // TEMP diagnostics: is the AP actually up, and with what IP/SSID?
+  Serial.printf(
+    "[WIFI-DIAG] softAPConfig=%d tx_set_err=0x%x tx_readback=%d softAP=%d staNum=%d IP=%s SSID=%s ch=%ld\n",
+    (int)cfg, (int)tx, (int)tx_read, (int)ap, (int)WiFi.softAPgetStationNum(), WiFi.softAPIP().toString().c_str(),
+    WiFi.softAPSSID().c_str(), (long)WiFi.channel());
 
   wifiOn = true;
 }
