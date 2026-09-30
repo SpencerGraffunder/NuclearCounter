@@ -178,9 +178,16 @@ jobs:
           TAG="${GITHUB_REF#refs/tags/}"
           (cd dist && zip -qr "../nuclearcounter-v2.1-c3-${TAG}.zip" v2.1-c3)
           (cd dist && zip -qr "../nuclearcounter-v3.0-s3-${TAG}.zip" v3.0-s3)
-          gh release create "$TAG" \
-            -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 S3)" \
-            -b "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the StarForgeOS web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
-            --latest=auto \
-            "nuclearcounter-v2.1-c3-${TAG}.zip" \
-            "nuclearcounter-v3.0-s3-${TAG}.zip"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run after an earlier partial success — replace the assets
+            gh release upload --clobber "$TAG" \
+              "nuclearcounter-v2.1-c3-${TAG}.zip" \
+              "nuclearcounter-v3.0-s3-${TAG}.zip"
+          else
+            gh release create "$TAG" \
+              -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 S3)" \
+              -n "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the StarForgeOS web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
+              --latest=auto \
+              "nuclearcounter-v2.1-c3-${TAG}.zip" \
+              "nuclearcounter-v3.0-s3-${TAG}.zip"
+          fi
