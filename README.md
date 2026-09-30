@@ -204,6 +204,8 @@ This repo has a GitHub Action (`.github/workflows/build.yml`) that builds **both
 
 Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)** → **Run workflow**. It builds both chips and uploads the two artifacts above. It also runs automatically on every push to `feat/dualboot` (or `main`) — a fresh artifact appears on each run's summary page.
 
+**Tag-based release:** pushing a tag that points at a commit on this branch creates a **GitHub release** named after the tag, with both packages attached as zip downloads (e.g. tag `DualBoot-1.0` → release `DualBoot-1.0` with `nuclearcounter-v2.1-c3-DualBoot-1.0.zip` and `nuclearcounter-v3.0-s3-DualBoot-1.0.zip`). Tags on other branches (like `master`) don't trigger it, because the workflow only exists on this branch.
+
 > [!NOTE]
 >
 > The action builds StarForgeOS from a fork: `SpencerGraffunder/StarForgeOS` @ branch `main`. Change the `starforgeos_repo` / `starforgeos_ref` inputs if you use a different fork/branch. Because the fork is public, no extra token is needed — if you ever point it at a *private* repo, add a read-only PAT to the repo secret `STARFORGEOS_TOKEN`.
