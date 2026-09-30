@@ -16,6 +16,10 @@
 #
 # If StarForgeOS is a private repo, add a read-only PAT to the repo secret
 # STARFORGEOS_TOKEN. If it's public, the default GITHUB_TOKEN is enough.
+#
+# Tag-based release: pushing ANY tag that points at a commit on this branch
+# (where this workflow file exists) builds both packages and creates a GitHub
+# release named after the tag, with the two zipped flash packages as assets.
 
 name: Build firmware (v2.1 C3 + v3.0 S3)
 
@@ -32,6 +36,10 @@ on:
         default: "main"
   push:
     branches: [main, feat/dualboot]
+    tags: ['*']
+
+permissions:
+  contents: write
 
 concurrency:
   group: build-${{ github.workflow }}-${{ github.ref }}
@@ -160,3 +168,19 @@ jobs:
           name: nuclearcounter-v3.0-s3
           path: dist/v3.0-s3
           if-no-files-found: error
+
+      - name: Create GitHub release from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          (cd dist && zip -qr "../nuclearcounter-v2.1-c3-${TAG}.zip" v2.1-c3)
+          (cd dist && zip -qr "../nuclearcounter-v3.0-s3-${TAG}.zip" v3.0-s3)
+          gh release create "$TAG" \
+            -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 S3)" \
+            -b "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the StarForgeOS web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
+            --latest=auto \
+            "nuclearcounter-v2.1-c3-${TAG}.zip" \
+            "nuclearcounter-v3.0-s3-${TAG}.zip"

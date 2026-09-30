@@ -66,23 +66,16 @@ void Api::startWifi() {
   ip.fromString(WIFI_IP);
   gateway.fromString(WIFI_IP);
   subnet.fromString(WIFI_SUBNET);
-  bool cfg = WiFi.softAPConfig(ip, gateway, subnet);
+  WiFi.softAPConfig(ip, gateway, subnet);
   delay(200);
 
   // Force MAX TX power (20 dBm). Must be set after WiFi.mode() and before
   // softAP() to take effect.
-  esp_err_t tx = esp_wifi_set_max_tx_power(20);
-  int8_t tx_read = -127; esp_wifi_get_max_tx_power(&tx_read);
+  esp_wifi_set_max_tx_power(20);
 
-  bool ap = WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, 1, 0, 4);
+  WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, 1, 0, 4);
   esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11N);
   server.begin();
-
-  // TEMP diagnostics: is the AP actually up, and with what IP/SSID?
-  Serial.printf(
-    "[WIFI-DIAG] softAPConfig=%d tx_set_err=0x%x tx_readback=%d softAP=%d staNum=%d IP=%s SSID=%s ch=%ld\n",
-    (int)cfg, (int)tx, (int)tx_read, (int)ap, (int)WiFi.softAPgetStationNum(), WiFi.softAPIP().toString().c_str(),
-    WiFi.softAPSSID().c_str(), (long)WiFi.channel());
 
   wifiOn = true;
 }

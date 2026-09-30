@@ -6,13 +6,8 @@ const T& clamp(const T& value, const T& low, const T& high) {
     return (value < low) ? low : (value > high) ? high : value;
 }
 
-// TEMP (OTA bring-up): boot straight to the Wi-Fi page so the AP is up
-  // without needing a person at the board to navigate hold-SELECT -> Wi-Fi.
-  // The WIFI draw case calls api->startWifi(). REMOVE before shipping.
-#define BOOT_MENU WIFI  // was MAIN
-
 Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, Api *a)
-  : menuIndex(BOOT_MENU),
+  : menuIndex(MAIN),
     previous_pin(p_p), select_pin(s_p), next_pin(n_p),
     selectButtonPressTime(0), selectButtonHeld(false),
     settings(s), buzzer(b), module(r), api(a),
