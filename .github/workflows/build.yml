@@ -1,0 +1,100 @@
+# Builds the four hardware-release firmware targets and packages them as
+# flash-ready zips:
+#
+#   nuclearcounter-v1    ->  V1 boards (non-reference design, reversed buttons)
+#   nuclearcounter-v2-0  ->  V2.0 boards (reference design, original screens)
+#   nuclearcounter-v2-1  ->  V2.1 boards (reference design, SH1306 screens)
+#   nuclearcounter-v3-0  ->  V3.0 boards (ESP32-S3)
+#
+# Manual run:  Actions tab -> "Build firmware (hardware releases)" -> Run workflow
+# Tag release: push any tag pointing at a commit on this branch (master) and a
+#              GitHub release named after the tag is created with the zips.
+
+name: Build firmware (hardware releases)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    tags: ['*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        uses: platformio/tool-action@v1.0.5
+        with:
+          version: platformio
+
+      - name: Build all hardware targets
+        run: |
+          pio run -e NuclearCounterV1
+          pio run -e NuclearCounterV2_0
+          pio run -e NuclearCounterV2_1
+          pio run -e NuclearCounterV3_0
+
+      - name: Package flash-ready zips
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for spec in \
+            "NuclearCounterV1:nuclearcounter-v1:esp32c3" \
+            "NuclearCounterV2_0:nuclearcounter-v2-0:esp32c3" \
+            "NuclearCounterV2_1:nuclearcounter-v2-1:esp32c3" \
+            "NuclearCounterV3_0:nuclearcounter-v3-0:esp32s3"; do
+            ENV="${spec%%:*}"; rest="${spec#*:}"
+            S="${rest%%:*}"; CHIP="${rest#*:}"
+            D="dist/$S"
+            mkdir -p "$D"
+            cp ".pio/build/$ENV/bootloader.bin" "$D/"
+            cp ".pio/build/$ENV/partitions.bin" "$D/"
+            cp ".pio/build/$ENV/firmware.bin"   "$D/"
+            cp "tools/flash_single.sh"          "$D/flash.sh"
+            chmod +x "$D/flash.sh"
+            echo "CHIP=$CHIP" > "$D/manifest.txt"
+          done
+          ls -la dist/*/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclearcounter-hardware
+          path: dist
+          if-no-files-found: error
+
+      - name: Create GitHub release from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          for D in dist/*/; do
+            S="$(basename "$D")"
+            (cd dist && zip -qr "../${S}-${TAG}.zip" "$S")
+          done
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # Re-run after an earlier partial success — replace the assets
+            gh release upload --clobber "$TAG" ./*-${TAG}.zip
+          else
+            gh release create "$TAG" \
+              -t "NuclearCounter firmware ${TAG}" \
+              -n "Flash-ready packages per hardware version: nuclearcounter-v1 (V1 boards), nuclearcounter-v2-0 (V2.0 boards), nuclearcounter-v2-1 (V2.1 boards), nuclearcounter-v3-0 (V3.0 / ESP32-S3 boards). Each zip contains bootloader.bin, partitions.bin, firmware.bin and flash.sh (run it with the serial port as its argument)." \
+              ./*-${TAG}.zip
+          fi

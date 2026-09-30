@@ -232,6 +232,20 @@ Click the `Upload` button to compile the firmware and upload it to the ESP32.
 >
 > If you're getting errors during flashing, or the device doesn't appear, go to `Tools > USB CDC On Boot` and change it to `Enabled`. This allows the USB connection to remain active during boot, which can help with problems where the port isn't detected after the ESP32 reboots.
 
+### Releases (CI)
+
+Firmware is also built by GitHub Actions. Pushing a tag that points at a commit on `master` (or running the **Build firmware (hardware releases)** workflow manually from the Actions tab) builds all hardware targets and produces flash-ready zips — one per hardware version (`nuclearcounter-v1`, `nuclearcounter-v2-0`, `nuclearcounter-v2-1`, `nuclearcounter-v3-0`). Tag builds additionally create a **GitHub release** named after the tag with the zips as download assets.
+
+Each zip contains `bootloader.bin`, `partitions.bin`, `firmware.bin`, and `flash.sh`. To flash:
+
+```sh
+unzip nuclearcounter-v2-1-<tag>.zip && cd nuclearcounter-v2-1-<tag>
+./flash.sh            # auto-detects the serial port
+# or: ./flash.sh /dev/ttyACM0
+```
+
+Pick the package that matches your board's hardware version (V1 = original non-reference boards, V2.0 = reference design with original screens, V2.1 = reference design with SH1306 screens, V3.0 = ESP32-S3 boards).
+
 ### Battery calibration
 
 Different boards, even of the same model, can have variations in their analog-to-digital converters, so performing a simple calibration is necessary to ensure the device reads the correct battery voltage.
