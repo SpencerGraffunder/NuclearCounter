@@ -187,7 +187,6 @@ jobs:
             gh release create "$TAG" \
               -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 S3)" \
               -n "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the StarForgeOS web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
-              --latest=auto \
               "nuclearcounter-v2.1-c3-${TAG}.zip" \
               "nuclearcounter-v3.0-s3-${TAG}.zip"
           fi
