@@ -1,5 +1,8 @@
 #include "menu.h"
 #include "esp_ota_ops.h"
+#ifdef INTEGRATED
+#include "integrated.h"
+#endif
 
 template <typename T>
 const T& clamp(const T& value, const T& low, const T& high) {
@@ -13,6 +16,17 @@ Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808
     settings(s), buzzer(b), module(r), api(a),
     u8g2(U8G2_R0, U8X8_PIN_NONE) {
 }
+
+#ifdef INTEGRATED
+Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, IntegratedMode *i)
+  : menuIndex(MAIN),
+    previous_pin(p_p), select_pin(s_p), next_pin(n_p),
+    selectButtonPressTime(0), selectButtonHeld(false),
+    settings(s), buzzer(b), module(r), api(nullptr),
+    integrated(i),
+    u8g2(U8G2_R0, U8X8_PIN_NONE) {
+}
+#endif
 
 // Begin menu object
 void Menu::begin() {
@@ -76,7 +90,15 @@ void Menu::handleButtons() {
   }
 
   // Update length of scan menu
+#ifdef INTEGRATED
+  // The SCAN page is the scanner bar graph in scanner mode, but the live
+  // status page (no selectable items) while a background mode owns the RX5808
+  menus[SCAN].menuItemsLength = (integrated->mode() == IntMode::SCANNER)
+      ? (SCAN_FREQUENCY_RANGE / settings->scanInterval.get()) + 1  // +1 for final number inclusion
+      : 1;
+#else
   menus[SCAN].menuItemsLength = (SCAN_FREQUENCY_RANGE / settings->scanInterval.get()) + 1;  // +1 for final number inclusion
+#endif
 
   // Move between menu items
   if (nextPressed == HIGH || prevPressed == HIGH) {
@@ -120,6 +142,58 @@ void Menu::handleButtons() {
 
   // If SELECT button was pressed but not held, use as SELECT rather than BACK
   if (selectButtonPressTime > 0 && !selectButtonHeld) {
+#ifdef INTEGRATED
+    switch (menuIndex) {
+      case MAIN:  // Mode rows: SCAN opens the scanner/status page; the other
+        // two enter the background mode (or toggle it back to scanner)
+        switch (menus[MAIN].menuIndex) {
+          case 0: menuIndex = SCAN; break;                      // Scanner page
+          case 1: integrated->selectMode(IntMode::NODE); break;   // Stay on MAIN
+          case 2: integrated->selectMode(IntMode::TIMER); break;  // Stay on MAIN
+        }
+        break;
+      case SCAN:  // Band toggle in scanner mode; the status page has no selection
+        if (integrated->mode() == IntMode::SCANNER) {
+          module->lowband.set(!module->lowband.get());
+        }
+        break;
+      case SETTINGS:  // Handle SELECT on settings menu
+        switch (menus[SETTINGS].menuIndex) {
+          case 0: menuIndex = SCAN_INTERVAL; break;  // Go to scan interval menu
+          case 1: menuIndex = BUZZER; break;         // Go to buzzer menu
+          case 2: menuIndex = BATTERY_ALARM; break;  // Go to battery alarm menu
+        }
+        break;
+      case ADVANCED:  // Handle SELECT on advanced menu
+        switch (menus[ADVANCED].menuIndex) {
+          case 0: menuIndex = SETTINGS; break;     // Go to settings menu
+          case 1: menuIndex = CALIBRATION; break;  // Go to calibration menu
+          case 2: bootStarForge(); break;          // Boot the StarForgeOS slot
+          case 3: menuIndex = ABOUT; break;        // Go to about menu
+        }
+        break;
+      case SCAN_INTERVAL ... BATTERY_ALARM:  // Handle SELECT on individual settings options
+        switch (menuIndex) {
+          case SCAN_INTERVAL:  // Update scan interval settings and icons
+            settings->scanIntervalIndex.set(menus[menuIndex].menuIndex);
+            menus[SCAN].menuIndex = 0;
+            break;
+          case BUZZER:  // Update buzzer settings and icons
+            settings->buzzerIndex.set(menus[menuIndex].menuIndex);
+            break;
+          case BATTERY_ALARM:  // Update battery alarm settings and icons
+            settings->batteryAlarmIndex.set(menus[menuIndex].menuIndex);
+            break;
+        }
+        break;
+      case CALIBRATION:  // Pause the timing engine around the calibration
+        switch (menus[CALIBRATION].menuIndex) {
+          case 0: calibrateWithTiming(true); break;   // Calibrate high rssi
+          case 1: calibrateWithTiming(false); break;  // Calibrate low rssi
+        }
+        break;
+    }
+#else
     switch (menuIndex) {
       case MAIN:  // Handle SELECT on main menu
         switch (menus[MAIN].menuIndex) {
@@ -166,6 +240,7 @@ void Menu::handleButtons() {
         }
         break;
     }
+#endif
   }
 
   // Reset SELECT when button released
@@ -203,6 +278,26 @@ void Menu::drawMenu() {
   }
 
   // Call appropriate draw function
+#ifdef INTEGRATED
+  switch (menuIndex) {
+    case SCAN:  // Scanner bar graph, or the live status page (NODE/TIMER)
+      if (integrated->mode() == IntMode::SCANNER) {
+        module->startScan();
+        drawScanMenu();
+      } else {
+        module->stopScan();
+        drawStatusMenu();
+      }
+      break;
+    case ABOUT:  // Draw about menu
+      drawAboutMenu();
+      break;
+    default:  // Draw selection menu with options
+      module->stopScan();
+      drawSelectionMenu();
+      break;
+  }
+#else
   switch (menuIndex) {
     case SCAN:  // Draw scan menu
       module->startScan();
@@ -222,6 +317,7 @@ void Menu::drawMenu() {
       drawSelectionMenu();
       break;
   }
+#endif
 }
 
 // Display battery voltage in bottom corner of main menu
@@ -267,6 +363,19 @@ void Menu::drawSelectionMenu() {
       u8g2.drawStr(30, 28 + (i * 16), menus[menuIndex].menuItems[i].name);
     }
   }
+
+#ifdef INTEGRATED
+  // Mark the active background mode on the main menu
+  if (menuIndex == MAIN) {
+    int activeRow = (integrated->mode() == IntMode::NODE) ? 1 :
+                    (integrated->mode() == IntMode::TIMER) ? 2 : -1;
+    if (activeRow >= 0) {
+      u8g2.setFont(u8g2_font_5x7_tf);
+      u8g2.drawStr(104, 28 + (activeRow * 16), "ON");
+      u8g2.setFont(u8g2_font_7x13_tf);
+    }
+  }
+#endif
 
   // Draw extra text for calibration menu
   if (menuIndex == CALIBRATION) {
@@ -397,6 +506,50 @@ void Menu::drawAboutMenu() {
   u8g2.drawStr(xTextCentre(AUTHOR, 5), 56, AUTHOR);
 }
 
+#ifdef INTEGRATED
+// Live status page shown on the SCAN page while a background mode (NODE or
+// TIMER) owns the RX5808: current channel, live RSSI, lap count, and the AP
+// IP in timer mode. The scanner bar graph is only available in scanner mode.
+void Menu::drawStatusMenu() {
+  bool node = (integrated->mode() == IntMode::NODE);
+  const char *title = node ? "USB Node" : "WiFi Timer";
+  u8g2.setFont(u8g2_font_7x13B_tf);
+  u8g2.drawStr(xTextCentre(title, 7), 12, title);
+
+  char line[24];
+  u8g2.setFont(u8g2_font_7x13_tf);
+  if (node) {
+    snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
+    u8g2.drawStr(10, 28, line);
+    snprintf(line, sizeof(line), "RSSI %d", integrated->rssi());
+    u8g2.drawStr(10, 42, line);
+    u8g2.setFont(u8g2_font_5x7_tf);
+    snprintf(line, sizeof(line), "Laps %d  Last %d.%ds",
+             integrated->lapCount(), integrated->lastLapTimeMs() / 1000,
+             (integrated->lastLapTimeMs() % 1000) / 100);
+    u8g2.drawStr(10, 58, line);
+  } else {
+    snprintf(line, sizeof(line), "IP %s", integrated->apIP().c_str());
+    u8g2.drawStr(10, 28, line);
+    snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
+    u8g2.drawStr(10, 42, line);
+    u8g2.setFont(u8g2_font_5x7_tf);
+    snprintf(line, sizeof(line), "RSSI %d  Laps %d",
+             integrated->rssi(), integrated->lapCount());
+    u8g2.drawStr(10, 58, line);
+  }
+}
+
+// RX5808::calibrate() bit-bangs the same pins the 1ms timing task drives in
+// NODE/TIMER modes, so the engine is paused around the call (and re-tuned
+// afterwards, since calibrate() leaves the hardware at 5800 MHz).
+void Menu::calibrateWithTiming(bool high) {
+  bool wasActive = integrated->pauseForCalibration();
+  module->calibrate(high);
+  integrated->resumeAfterCalibration(wasActive);
+}
+#endif
+
 // Draw static content on Wi-Fi menu
 void Menu::drawWifiMenu() {
   // Draw SSID
@@ -436,10 +589,18 @@ void Menu::updateSettingsOptionIcons(menuStruct *menu, int selectedIndex) {
 
 // Initialise menu structures
 void Menu::initMenus() {
+#ifdef INTEGRATED
+  // Main menu (integrated): SCAN opens the scanner/status page; the other
+  // rows enter (or toggle off) the background modes
+  mainMenuItems[0] = { "Scan", bitmap_Scan };
+  mainMenuItems[1] = { "USB Node", bitmap_Star };
+  mainMenuItems[2] = { "WiFi Timer", bitmap_Wifi };
+#else
   // Main menu
   mainMenuItems[0] = { "Scan", bitmap_Scan };
   mainMenuItems[1] = { "Settings", bitmap_Settings };
   mainMenuItems[2] = { "About", bitmap_About };
+#endif
 
   // Settings menu
   settingsMenuItems[0] = { "Scan interval", bitmap_Interval };
@@ -460,10 +621,18 @@ void Menu::initMenus() {
   batteryAlarmMenuItems[1] = { "3.3v", bitmap_Blank };
   batteryAlarmMenuItems[2] = { "3.0v", bitmap_Blank };
 
+#ifdef INTEGRATED
+  // Advanced menu (integrated)
+  advancedMenuItems[0] = { "Settings", bitmap_Settings };
+  advancedMenuItems[1] = { "Calibration", bitmap_Calibration };
+  advancedMenuItems[2] = { "Boot StarForge", bitmap_Star };
+  advancedMenuItems[3] = { "About", bitmap_About };
+#else
   // Advanced menu
   advancedMenuItems[0] = { "Wi-Fi", bitmap_Wifi };
   advancedMenuItems[1] = { "Calibration", bitmap_Calibration };
   advancedMenuItems[2] = { "StarForge", bitmap_Star };
+#endif
 
   // Calibration menu
   calibrationMenuItems[0] = { "Calib. high", bitmap_Wifi };
@@ -474,7 +643,11 @@ void Menu::initMenus() {
   menus[1] = { "Scan", nullptr, MAX_FREQUENCIES_SCANNED, 0 };
   menus[2] = { "Settings", settingsMenuItems, 3, 0 };
   menus[3] = { "About", nullptr, 1, 0 };
+#ifdef INTEGRATED
+  menus[4] = { "Advanced", advancedMenuItems, 4, 0 };
+#else
   menus[4] = { "Advanced", advancedMenuItems, 3, 0 };
+#endif
   menus[5] = { "Scan interval", scanIntervalMenuItems, 3, 0 };
   menus[6] = { "Buzzer", buzzerMenuItems, 2, 0 };
   menus[7] = { "Bat. alarm", batteryAlarmMenuItems, 3, 0 };

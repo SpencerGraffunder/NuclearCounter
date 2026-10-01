@@ -1,3 +1,4 @@
+#ifndef INTEGRATED  // The integrated S3 build replaces the old web API / OTA updater with the SFOS-ported web stack
 #include "api.h"
 #include <esp_wifi.h>
 
@@ -357,3 +358,4 @@ void Api::handlePostCalibration(AsyncWebServerRequest *request, uint8_t *data, s
 
   request->send(200, "application/json", "{\"status\":\"ok\"}");
 }
+#endif  // INTEGRATED

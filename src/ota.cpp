@@ -1,3 +1,4 @@
+#ifndef INTEGRATED  // The integrated S3 build replaces the old web API / OTA updater with the SFOS-ported web stack
 #include "ota.h"
 
 #define OTA_CHUNK_TIMEOUT_MS 120000UL
@@ -11,11 +12,11 @@ void OtaUpdater::begin(AsyncWebServer *server) {
   server->on("/api/ota/status", HTTP_GET, [this](AsyncWebServerRequest *r) { handleStatus(r); });
   server->on("/api/ota/start", HTTP_POST, [this](AsyncWebServerRequest *r) { handleStart(r); });
   // Raw-body upload: callers MUST send Content-Type: application/octet-stream.
-  // RawBodyHandler makes the route "trivial" so form-encoded/multipart bodies
+  // OtaRawBodyHandler makes the route "trivial" so form-encoded/multipart bodies
   // are never parsed into RAM (the framework's form parser accumulates the
   // whole body and can OOM the board); octet-stream bytes still stream in
   // per-chunk and otaDone() sends exactly one response per completed POST.
-  server->addHandler(new RawBodyHandler(
+  server->addHandler(new OtaRawBodyHandler(
     "/api/ota/data",
     [this](AsyncWebServerRequest *r, uint8_t *d, size_t l, size_t i, size_t t) { otaBody(r, d, l, i, t); },
     [this](AsyncWebServerRequest *r) { otaDone(r); }));
@@ -401,3 +402,4 @@ void OtaUpdater::handleBoot(AsyncWebServerRequest *request) {
   vTaskDelay(pdMS_TO_TICKS(500));
   esp_restart();
 }
+#endif  // INTEGRATED

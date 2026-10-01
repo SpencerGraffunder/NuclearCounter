@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Hertz Hunter Timer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/style.css?v=7">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>HERTZ HUNTER TIMER</h1>
+            <div class="status-container">
+                <div class="status">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Connecting...</span>
+                </div>
+                <div class="race-status" id="raceStatus">
+                    <div class="race-status-indicator" id="raceStatusIndicator"></div>
+                    <span id="raceStatusText">Ready</span>
+                </div>
+            </div>
+        </header>
+        
+        <div class="config-section">
+            <div class="config-header" onclick="toggleConfig()">
+                <h3>⚙ Configuration</h3>
+                <span class="expand-icon collapsed" id="configIcon">&#9660;</span>
+            </div>
+            <div class="config-content collapsed" id="configContent">
+                <div class="config-row">
+                    <div class="config-item">
+                        <label for="bandSelect">FPV Band:</label>
+                        <select id="bandSelect" onchange="updateChannels()">
+                            <option value="Raceband">Raceband</option>
+                            <option value="Fatshark">Fatshark</option>
+                            <option value="Boscam_A">Boscam A</option>
+                            <option value="Boscam_E">Boscam E</option>
+                        </select>
+                    </div>
+                    <div class="config-item">
+                        <label for="channelSelect">Channel:</label>
+                        <select id="channelSelect" onchange="setFrequency()">
+                            <option value="5658">Loading...</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="config-item">
+                        <label for="enterRssiSlider">Enter RSSI (Start Peak):</label>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="range" id="enterRssiSlider" min="50" max="255" value="120" oninput="updateEnterRssiVisual(this.value)" onchange="updateThresholdsServer()" style="flex: 1;">
+                            <span id="enterRssiValue">120</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="config-item">
+                        <label for="exitRssiSlider">Exit RSSI (End Peak):</label>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="range" id="exitRssiSlider" min="50" max="255" value="100" oninput="updateExitRssiVisual(this.value)" onchange="updateThresholdsServer()" style="flex: 1;">
+                            <span id="exitRssiValue">100</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="config-item" style="opacity: 0.7; font-size: 0.9em;">
+                        <label>Note: Enter RSSI should be higher than Exit RSSI</label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="config-section">
+            <div class="config-header" onclick="toggleUpdate()">
+                <h3>📦 Update</h3>
+                <span class="expand-icon collapsed" id="updateIcon">&#9660;</span>
+            </div>
+            <div class="config-content collapsed" id="updateContent">
+                <h4 class="update-subhead">Firmware (dual-boot)</h4>
+                <div class="update-slot" id="slotCard0">
+                    <div class="slot-head">
+                        <span class="slot-label">ota_0</span>
+                        <span class="slot-badge" id="slotBadge0">--</span>
+                        <span class="slot-state" id="slotState0">--</span>
+                    </div>
+                    <div class="slot-detail" id="slotDetail0"></div>
+                    <div class="slot-actions" id="slotActions0">
+                        <input type="file" id="slotFile0" accept=".bin">
+                        <button class="btn btn-primary" id="slotBtn0" onclick="startFirmwareUpdate(0)" disabled>Install</button>
+                    </div>
+                </div>
+                <div class="update-slot" id="slotCard1">
+                    <div class="slot-head">
+                        <span class="slot-label">ota_1</span>
+                        <span class="slot-badge" id="slotBadge1">--</span>
+                        <span class="slot-state" id="slotState1">--</span>
+                    </div>
+                    <div class="slot-detail" id="slotDetail1"></div>
+                    <div class="slot-actions" id="slotActions1">
+                        <input type="file" id="slotFile1" accept=".bin">
+                        <button class="btn btn-primary" id="slotBtn1" onclick="startFirmwareUpdate(1)" disabled>Install</button>
+                    </div>
+                </div>
+                <div class="update-progress" id="otaProgress" style="display:none;">
+                    <div class="progress-track"><div class="progress-fill" id="otaProgressFill"></div></div>
+                    <span class="progress-text" id="otaProgressText"></span>
+                </div>
+                <div id="otaBootRow" style="display:none; margin-top: 8px;">
+                    <button class="btn btn-primary" id="otaBootBtn" onclick="bootOtaSlot()">🔄 Reboot into new firmware</button>
+                </div>
+                <p class="update-note">Only the slot that is NOT running can be updated from this page — the running firmware is protected. The board keeps running normally until you press the reboot button.</p>
+
+                <h4 class="update-subhead">Web UI files (data partition)</h4>
+                <div class="data-files" id="dataFileList">
+                    <p class="no-laps">Loading...</p>
+                </div>
+                <div class="data-file-actions">
+                    <input type="file" id="dataFileInput">
+                    <button class="btn btn-primary" id="dataUploadBtn" onclick="uploadDataFile()">Upload file</button>
+                </div>
+                <p class="update-note" id="dataSpaceNote"></p>
+                <p class="update-note">Uploaded files are served immediately — no reboot needed. Uploading a file with an existing name replaces it.</p>
+            </div>
+        </div>
+
+        <div class="rssi-section">
+            <div class="rssi-graph-container">
+                <canvas id="rssiCanvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="notification-section">
+            <div class="notification-bar" id="notificationBar">
+                <span id="notificationText"></span>
+            </div>
+        </div>
+        
+        <div class="control-panel">
+            <div class="controls">
+                <button id="startBtn" onclick="startRace()" class="btn btn-primary">▶ Start Race</button>
+                <button id="stopBtn" onclick="stopRace()" class="btn btn-secondary">⏹ Stop Race</button>
+                <button id="clearBtn" onclick="clearLaps()" class="btn btn-danger">🗑️ Clear Laps</button>
+            </div>
+            <div class="controls">
+                <button id="audioToggle" onclick="toggleAudio()" class="btn btn-info active">🔊 Audio On</button>
+                <button onclick="testAudio()" class="btn btn-info">🔈 Test Audio</button>
+                <button onclick="downloadRaceData()" class="btn btn-info">📥 Download Race Data</button>
+            </div>
+        </div>
+        
+        <div class="current-status">
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-label">Total Laps</div>
+                    <div class="stat-number" id="lapCount">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Best Lap</div>
+                    <div class="stat-number" id="bestLap">--:--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Best 3 Laps</div>
+                    <div class="stat-number" id="best3Lap">--:--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Last Lap</div>
+                    <div class="stat-number" id="lastLap">--:--</div>
+                </div>
+                <div class="stat-card" id="batteryCard" style="display: none;">
+                    <div class="stat-label">Battery</div>
+                    <div class="stat-number" id="batteryPercentage">--%</div>
+                    <div class="stat-subtext" id="batteryVoltage">--V</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="laps-section">
+            <h2>🏁 Lap Times</h2>
+            <div id="laps" class="laps-container">
+                <p class="no-laps">No laps recorded yet</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="/app.js?v=7"></script>
+    <script>
+        // Initialize thresholds from server on page load
+        async function initializeThresholds() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                // Load enter RSSI (prefer new API, fallback to old threshold for compatibility)
+                const enterRssi = data.enter_rssi !== undefined ? data.enter_rssi : (data.threshold || 120);
+                const enterSlider = document.getElementById('enterRssiSlider');
+                const enterValue = document.getElementById('enterRssiValue');
+                if (enterSlider && enterValue) {
+                    enterSlider.value = enterRssi;
+                    enterValue.textContent = enterRssi;
+                }
+                
+                // Load exit RSSI (prefer new API, calculate from threshold if needed)
+                const exitRssi = data.exit_rssi !== undefined ? data.exit_rssi : (enterRssi > 100 ? enterRssi - 20 : 100);
+                const exitSlider = document.getElementById('exitRssiSlider');
+                const exitValue = document.getElementById('exitRssiValue');
+                if (exitSlider && exitValue) {
+                    exitSlider.value = exitRssi;
+                    exitValue.textContent = exitRssi;
+                }
+                
+                // Ensure enter > exit
+                if (parseInt(enterSlider.value) <= parseInt(exitSlider.value)) {
+                    exitSlider.value = Math.max(50, parseInt(enterSlider.value) - 20);
+                    exitValue.textContent = exitSlider.value;
+                }
+            } catch (error) {
+                console.error('Error loading thresholds:', error);
+            }
+        }
+        
+        // Call on page load
+        window.addEventListener('load', initializeThresholds);
+        
+        function toggleConfig() {
+            const content = document.getElementById('configContent');
+            const icon = document.getElementById('configIcon');
+            content.classList.toggle('collapsed');
+            icon.classList.toggle('collapsed');
+        }
+
+        function toggleUpdate() {
+            const content = document.getElementById('updateContent');
+            const icon = document.getElementById('updateIcon');
+            content.classList.toggle('collapsed');
+            icon.classList.toggle('collapsed');
+        }
+        
+        function updateEnterRssiVisual(value) {
+            document.getElementById('enterRssiValue').textContent = value;
+            // Ensure exit is less than enter
+            const exitSlider = document.getElementById('exitRssiSlider');
+            const exitValue = document.getElementById('exitRssiValue');
+            if (exitSlider && exitValue && parseInt(value) <= parseInt(exitSlider.value)) {
+                exitSlider.value = Math.max(50, parseInt(value) - 20);
+                exitValue.textContent = exitSlider.value;
+            }
+        }
+        
+        function updateExitRssiVisual(value) {
+            document.getElementById('exitRssiValue').textContent = value;
+            // Ensure enter is greater than exit
+            const enterSlider = document.getElementById('enterRssiSlider');
+            const enterValue = document.getElementById('enterRssiValue');
+            if (enterSlider && enterValue && parseInt(value) >= parseInt(enterSlider.value)) {
+                enterSlider.value = Math.min(255, parseInt(value) + 20);
+                enterValue.textContent = enterSlider.value;
+            }
+        }
+        
+        function updateThresholdsServer() {
+            // Update both thresholds on server
+            const enterRssi = document.getElementById('enterRssiSlider').value;
+            const exitRssi = document.getElementById('exitRssiSlider').value;
+            
+            // Validate enter > exit
+            if (parseInt(enterRssi) <= parseInt(exitRssi)) {
+                console.error('Enter RSSI must be greater than Exit RSSI');
+                return;
+            }
+            
+            fetch('/api/set_threshold', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `enter_rssi=${enterRssi}&exit_rssi=${exitRssi}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Thresholds updated:', data);
+            })
+            .catch(error => {
+                console.error('Error updating thresholds:', error);
+            });
+        }
+        
+        function toggleAudio() {
+            if (window.raceTimer) {
+                raceTimer.toggleAudio();
+            }
+        }
+        
+        function updateChannels() {
+            // Called when band selector changes
+            if (window.raceTimer && window.raceTimer.updateChannelOptions) {
+                const bandSelect = document.getElementById('bandSelect');
+                window.raceTimer.updateChannelOptions(bandSelect.value);
+            } else {
+                console.log('Waiting for RaceTimer initialization...');
+                // Try again after a short delay
+                setTimeout(() => {
+                    if (window.raceTimer && window.raceTimer.updateChannelOptions) {
+                        const bandSelect = document.getElementById('bandSelect');
+                        window.raceTimer.updateChannelOptions(bandSelect.value);
+                    }
+                }, 500);
+            }
+        }
+        
+        function setFrequency() {
+            // Called when channel selector changes
+            const channelSelect = document.getElementById('channelSelect');
+            const frequency = parseInt(channelSelect.value);
+            
+            console.log('Setting frequency to:', frequency);
+            
+            // Send to server via API
+            fetch('/api/set_frequency', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `frequency=${frequency}`
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Frequency set:', data);
+            })
+            .catch(error => {
+                console.error('Error setting frequency:', error);
+            });
+        }
+        
+        function clearLaps() {
+            if (confirm('Are you sure you want to clear all lap data?')) {
+                fetch('/api/clear_laps', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Laps cleared:', data);
+                    if (window.raceTimer) {
+                        window.raceTimer.clearLaps();  // Use method to properly reset lastLapCount
+                        window.raceTimer.clearRecording();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error clearing laps:', error);
+                });
+            }
+        }
+
+        async function downloadRaceData() {
+            if (window.raceTimer) {
+                await window.raceTimer.downloadRaceData('both');
+            } else {
+                alert('Race timer not initialized');
+            }
+        }
+    </script>
+</body>
+</html>

@@ -12,6 +12,10 @@
 #include "RX5808.h"
 #include "settings.h"
 
+#ifdef INTEGRATED
+class IntegratedMode;
+#endif
+
 #define DISPLAY_WIDTH 128
 #define DISPLAY_HEIGHT 64
 
@@ -44,6 +48,9 @@ enum MenuIndex {
 class Menu {
 public:
   Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, Api *a);
+#ifdef INTEGRATED
+  Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, IntegratedMode *i);
+#endif
   void begin();
   void handleButtons();
   void clearBuffer();
@@ -96,6 +103,12 @@ private:
   Buzzer *buzzer;
   RX5808 *module;
   Api *api;
+
+#ifdef INTEGRATED
+  IntegratedMode *integrated;
+  void drawStatusMenu();
+  void calibrateWithTiming(bool high);
+#endif
 
 #ifdef SH1106
   // SH1106: MUST use the F (full-frame, 64-row) buffer. The _2_ variants use a

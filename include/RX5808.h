@@ -23,6 +23,9 @@ public:
   void stopScan();
   void calibrate(bool high);
 
+  // Frequency control (public: the integrated TimingCore delegates RF tuning to this object)
+  void setFrequency(int frequency);
+
   VariableArrayRestricted<int, MAX_FREQUENCIES_SCANNED> rssiValues;
   Variable<bool> lowband;
 
@@ -30,7 +33,6 @@ public:
 
 private:
   static void _scan(void *parameter);
-  void setFrequency(int frequency);
   int readRSSI();
   void reset();
   void sendRegister(byte address, unsigned long data);

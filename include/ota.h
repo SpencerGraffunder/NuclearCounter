@@ -15,12 +15,12 @@
 // board). handleBody() still streams application/octet-stream bytes
 // per-chunk. The done callback runs exactly once per completed POST
 // (_runChain at body end) and is the single place the HTTP response is sent.
-class RawBodyHandler : public AsyncWebHandler {
+class OtaRawBodyHandler : public AsyncWebHandler {
 public:
   using BodyFn = std::function<void(AsyncWebServerRequest *request, uint8_t *data,
                                    size_t len, size_t index, size_t total)>;
   using DoneFn = std::function<void(AsyncWebServerRequest *request)>;
-  RawBodyHandler(const String &uri, BodyFn onBody, DoneFn onDone)
+  OtaRawBodyHandler(const String &uri, BodyFn onBody, DoneFn onDone)
       : _uri(uri), _onBody(onBody), _onDone(onDone) {}
   bool canHandle(AsyncWebServerRequest *request) const override {
     return request && request->method() == HTTP_POST && request->url() == _uri;
@@ -46,7 +46,7 @@ private:
 //  - streamed chunk-by-chunk into the partition (no big RAM buffers)
 //  - size-checked up front; image validated by esp_ota_end()
 //  - boot switch only on explicit request
-//  - form/multipart bodies are never parsed (RawBodyHandler above)
+//  - form/multipart bodies are never parsed (OtaRawBodyHandler above)
 class OtaUpdater {
 public:
   OtaUpdater();

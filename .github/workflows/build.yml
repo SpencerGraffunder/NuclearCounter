@@ -101,6 +101,10 @@ jobs:
         run: |
           pio run -e NuclearCounterV2_1
           pio run -e NuclearCounterV3_0
+          # V3.0 INTEGRATED serves its web timer UI from the shared spiffs
+          # partition (0x330000) — build the image (plain pio run does not
+          # auto-build it in this setup).
+          pio run -e NuclearCounterV3_0 -t buildfs
 
       - name: Build StarForgeOS — C3 + S3 (firmware + SPIFFS UI)
         working-directory: starforgeos
@@ -143,7 +147,11 @@ jobs:
           cp "$NC_S3/bootloader.bin"  "$D/bootloader.bin"
           cp "$NC_S3/firmware.bin"    "$D/nuclearcounter-ota0.bin"
           cp "$SF_S3/firmware.bin"     "$D/starforge-ota1.bin"
-          cp "$SF_S3/spiffs.bin"       "$D/starforge-ui.bin"
+          # The spiffs partition (0x330000) is shared by both apps. NC INTEGRATED
+          # (the primary app on ota_0) serves its own web timer UI from it, so
+          # package NC's spiffs image. Booting the SFOS slot shows the same
+          # (rebranded-identical) UI.
+          [ -f "$NC_S3/spiffs.bin" ] && cp "$NC_S3/spiffs.bin" "$D/hertzhunter-ui.bin"
           check_ota1 "$D/partitions.bin" 0x1A0000 "v3.0-s3"
           cp tools/flash.sh "$D/flash.sh"; chmod +x "$D/flash.sh"
           cat > "$D/manifest.txt" <<'EOF'

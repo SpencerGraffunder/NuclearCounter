@@ -1,10 +1,14 @@
 #include <esp_ota_ops.h>
-#include "api.h"
 #include "battery.h"
 #include "buzzer.h"
 #include "menu.h"
 #include "RX5808.h"
 #include "settings.h"
+#ifdef INTEGRATED
+#include "integrated.h"
+#else
+#include "api.h"
+#endif
 
 // Create settings object to store settings state
 // Initialised with default settings
@@ -19,11 +23,22 @@ Battery battery(BATTERY_PIN, &settings);
 // Create RX5808 object
 RX5808 module(SPI_DATA_PIN, SPI_LE_PIN, SPI_CLK_PIN, RSSI_PIN, &settings);
 
+#ifndef INTEGRATED
 // Create api object
 Api api(&settings, &module, &battery);
+#endif
+
+#ifdef INTEGRATED
+// Integrated mode orchestrator (SFOS-ported timing / USB node / web stack)
+IntegratedMode integrated(&settings, &module);
+#endif
 
 // Create menu object
+#ifdef INTEGRATED
+Menu menu(PREVIOUS_BUTTON_PIN, SELECT_BUTTON_PIN, NEXT_BUTTON_PIN, &settings, &buzzer, &module, &integrated);
+#else
 Menu menu(PREVIOUS_BUTTON_PIN, SELECT_BUTTON_PIN, NEXT_BUTTON_PIN, &settings, &buzzer, &module, &api);
+#endif
 
 void setup() {
   // Setup serial for debugging
@@ -32,6 +47,11 @@ void setup() {
 
   // Load settings from non-volatile memory
   settings.loadSettingsStorage();
+
+#ifdef INTEGRATED
+  // Start in scanner mode; the menu rows enter the USB node / WiFi timer modes
+  integrated.begin();
+#endif
 
   // Setup menu
   menu.begin();
@@ -53,6 +73,11 @@ void loop() {
   } else {
     buzzer.stopAlarm();
   }
+
+#ifdef INTEGRATED
+  // Background mode work (RotorHazard node serial protocol, timing)
+  integrated.process();
+#endif
 
   // Handle button presses
   // Menu object internally stores which menu currently on
