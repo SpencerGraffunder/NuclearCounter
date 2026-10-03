@@ -283,7 +283,13 @@ void Menu::drawMenu() {
   // Draw title, but not for scan menu or about (the about screen draws its
   // own "NuclearCounter" header at the same position — drawing the generic
   // title too made the two texts overlap)
-  if (menuIndex != SCAN && menuIndex != ABOUT) {
+  bool noGenericTitle = (menuIndex == SCAN || menuIndex == ABOUT);
+#ifdef INTEGRATED
+  // The WiFi timer page draws its own compact header (title top-left, IP
+  // top-right) instead of the big centred title
+  noGenericTitle = noGenericTitle || (menuIndex == WIFI);
+#endif
+  if (!noGenericTitle) {
     u8g2.setFont(u8g2_font_8x13B_tf);
     const char *title = menus[menuIndex].title;
     u8g2.drawStr(xTextCentre(title, 8), 13, title);
@@ -513,20 +519,31 @@ void Menu::drawAboutMenu() {
 }
 
 #ifdef INTEGRATED
-// WiFi timer status page: the AP IP, the tuned channel, live RSSI and the
-// lap count while the web timer is running. The generic page title
-// ("WiFi Timer") is drawn by drawMenu() above these rows.
+// WiFi timer page: small header (title top-left, AP IP top-right) over the
+// lap stats — last lap, best 3 consecutive, best lap — in the small 5x7 font.
 void Menu::drawTimerMenu() {
-  char line[24];
-  u8g2.setFont(u8g2_font_7x13_tf);
-  snprintf(line, sizeof(line), "IP %s", integrated->apIP().c_str());
-  u8g2.drawStr(10, 28, line);
-  snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
-  u8g2.drawStr(10, 42, line);
   u8g2.setFont(u8g2_font_5x7_tf);
-  snprintf(line, sizeof(line), "RSSI %d  Laps %d",
-           integrated->rssi(), integrated->lapCount());
-  u8g2.drawStr(10, 56, line);
+  u8g2.drawStr(1, 10, "WiFi Timer");
+  const char *ip = integrated->apIP().c_str();
+  u8g2.drawStr(128 - u8g2.getStrWidth(ip) - 1, 10, ip);
+
+  drawTimerLapRow("Last", integrated->lastLapMs(), 26);
+  drawTimerLapRow("Best 3", integrated->best3ConsecutiveMs(), 38);
+  drawTimerLapRow("Best", integrated->bestLapMs(), 50);
+}
+
+// One timer-page stat row: label left, time value right-aligned. A 0 value
+// means "no data yet" and renders as a dash placeholder.
+void Menu::drawTimerLapRow(const char *label, uint32_t ms, int y) {
+  char value[12];
+  if (ms == 0) {
+    snprintf(value, sizeof(value), "--.-");
+  } else {
+    snprintf(value, sizeof(value), "%lu.%02lus", ms / 1000, (ms % 1000) / 10);
+  }
+  u8g2.setFont(u8g2_font_5x7_tf);
+  u8g2.drawStr(2, y, label);
+  u8g2.drawStr(128 - u8g2.getStrWidth(value) - 2, y, value);
 }
 
 // Shown immediately when the user selects "WiFi Timer", before the

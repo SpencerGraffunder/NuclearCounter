@@ -173,6 +173,40 @@ void IntegratedMode::drainSerial() {
   }
 }
 
+uint32_t IntegratedMode::lastLapMs() const {
+  return _laps.empty() ? 0 : _laps.back().lap_time_ms;
+}
+
+uint32_t IntegratedMode::bestLapMs() const {
+  uint32_t best = 0;
+  for (const auto &lap : _laps) {
+    if (lap.valid && lap.lap_time_ms > 0 &&
+        (best == 0 || lap.lap_time_ms < best)) {
+      best = lap.lap_time_ms;
+    }
+  }
+  return best;
+}
+
+// Fastest sum of any 3 consecutive laps (the "best 3 in a row" racing metric).
+uint32_t IntegratedMode::best3ConsecutiveMs() const {
+  if (_laps.size() < 3) {
+    return 0;
+  }
+  uint32_t best = 0;
+  for (size_t i = 0; i + 2 < _laps.size(); i++) {
+    if (!(_laps[i].valid && _laps[i + 1].valid && _laps[i + 2].valid)) {
+      continue;
+    }
+    uint32_t sum = _laps[i].lap_time_ms + _laps[i + 1].lap_time_ms +
+                   _laps[i + 2].lap_time_ms;
+    if (sum > 0 && (best == 0 || sum < best)) {
+      best = sum;
+    }
+  }
+  return best;
+}
+
 void IntegratedMode::addLap(const LapData &lap) {
   if (_mode != IntMode::TIMER || !_raceActive) {
     return;

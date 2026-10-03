@@ -63,7 +63,11 @@ public:
   uint16_t frequencyMhz() const { return _timing.getCurrentFrequency(); }
   uint8_t rssi() const { return _timing.getCurrentRSSI(); }
   uint16_t lapCount() const { return _timing.getLapCount(); }
-  uint32_t lastLapTimeMs() { return _timing.getLastLap().lap_time_ms; }
+  // Lap stats for the timer page, from the web-shared lap history. Return 0
+  // for "no data yet" (the page renders that as a dash).
+  uint32_t lastLapMs() const;
+  uint32_t bestLapMs() const;
+  uint32_t best3ConsecutiveMs() const;
   String apIP() const { return WiFi.softAPIP().toString(); }
 
   // Called from the static timing lap callback (onTimingLap). Public because
