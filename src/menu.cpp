@@ -9,6 +9,12 @@ const T& clamp(const T& value, const T& low, const T& high) {
     return (value < low) ? low : (value > high) ? high : value;
 }
 
+// Timer-page control block element indices (defined early: handleButtons
+// needs TP_CTRL_START before the drawing code below defines the layout).
+#ifdef INTEGRATED
+static const int TP_CTRL_RSSI = 0, TP_CTRL_MINLAP = 1, TP_CTRL_START = 2;
+#endif
+
 Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, Api *a)
   : menuIndex(MAIN),
     previous_pin(p_p), select_pin(s_p), next_pin(n_p),
@@ -122,8 +128,16 @@ void Menu::handleButtons() {
     if (selectButtonPressTime == 0) {  // Button just pressed so record time
       selectButtonPressTime = millis();
 
-      // Sound buzzer on button press if necessary
-      if (settings->buzzer.get()) buzzer->buzz();
+      // Sound buzzer on button press if necessary. On the timer page the
+      // Start control plays its own race beeps (countdown / Go! / stop)
+      // on release, so skip the generic press beep there to avoid a doubled
+      // cue; the other two controls rely on this single press beep.
+#ifdef INTEGRATED
+      bool skipPressBeep = (menuIndex == WIFI && _timerCtrlCursor == TP_CTRL_START);
+#else
+      bool skipPressBeep = false;
+#endif
+      if (settings->buzzer.get() && !skipPressBeep) buzzer->buzz();
     } else if (!selectButtonHeld && millis() - selectButtonPressTime > LONG_PRESS_DURATION) {  // Held longer than threshold register long press
 #ifdef INTEGRATED
       // Long-press = go back one level toward MAIN. The scanner and WiFi
@@ -574,11 +588,16 @@ static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
 // 7. The control block still fits: its highlight box ends at row 58 < 64.
 static const int TP_ROW0_Y = 7, TP_ROW1_Y = 17, TP_ROW2_Y = 27, TP_ROW3_Y = 37;
 static const int TP_CTRL_LABEL_Y = 47, TP_CTRL_VALUE_Y = 57;
-// Control column x-positions (5x7 is monospace, 5px per char):
-//   col0 Cross RSSI ("RSSI" / "145/205"), col1 Min Lap ("Min Lap" / "10s"),
-//   col2 Start ("Start" / "Race").
-static const int TP_C1_X = 4, TP_C2_X = 44, TP_C3_X = 84;
-static const int TP_CTRL_RSSI = 0, TP_CTRL_MINLAP = 1, TP_CTRL_START = 2;
+// Control block: three equal elements, each DISPLAY_WIDTH/3 px wide (user
+// spec), with label + value text centered inside the element and the
+// selection highlight spanning the whole element. Integer division leaves 2px
+// uncovered on the right (128 = 42*3 + 2).
+// NOTE: the third element's box (cols 84-125) deliberately reaches into the
+// old 6px right black-guard zone (cols 122-127, see Menu::begin) — the same
+// trade-off the main menu's full-width highlight makes. If this panel's glass
+// defect bleeds at the box's right edge, cap the box width there rather than
+// reintroducing per-element widths.
+static const int TP_COL_W = DISPLAY_WIDTH / 3;  // 42px per control element
 
 // 2-decimal lap value ("12.34"), no trailing "s".
 static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
@@ -631,38 +650,40 @@ static int tpDrawSeg(U8G2 *u, const char *str, int start, int len, int x, int y,
   return x + len * 5;
 }
 
-// Draw one control element (label + value) in a highlight state:
+// Draw one control element (label + value) in the column at `colX` (width
+// TP_COL_W), with the text centered inside the column. Highlight states:
 //   0 = not selected (normal), 1 = selected, not editing (a white box covers
-//       both lines, text black), 2 = editing (only the numeric part of the
-//       value is highlighted). For state 2, hlStart/hlLen identify which chars
-//       of `value` make up the number (e.g. the "10" of "10s").
-static void tpDrawControl(U8G2 *u, int x, const char *label, const char *value,
+//       the WHOLE element — full column width, both lines — text black),
+//   2 = editing (only the numeric part of the value is highlighted). For
+//       state 2, hlStart/hlLen identify which chars of `value` make up the
+//       number (e.g. the "10" of "10s").
+static void tpDrawControl(U8G2 *u, int colX, const char *label, const char *value,
                           int state, int hlStart, int hlLen) {
-  int maxW = u->getStrWidth(label);
-  if (u->getStrWidth(value) > maxW) maxW = u->getStrWidth(value);
+  int labelX = colX + (TP_COL_W - u->getStrWidth(label)) / 2;
+  int valueX = colX + (TP_COL_W - u->getStrWidth(value)) / 2;
   if (state == 1) {
-    // Box must span from 1px above the label's glyph top (label baseline - 6 -
-    // 1) to 2px below the value's glyph bottom (value baseline + 2). See the
-    // 5x7-ascent GOTCHA on tpDrawSeg: baselines are 6px below each glyph top.
+    // Full-width box from 1px above the label's glyph top to 2px below the
+    // value's glyph bottom. See the 5x7-ascent GOTCHA on tpDrawSeg: baselines
+    // are 6px below each glyph top.
     int boxTop = TP_CTRL_LABEL_Y - 7;
     int boxBottom = TP_CTRL_VALUE_Y + 2;
-    u->drawBox(x, boxTop, maxW + 1, boxBottom - boxTop);
+    u->drawBox(colX, boxTop, TP_COL_W, boxBottom - boxTop);
     u->setDrawColor(0);
-    u->drawStr(x, TP_CTRL_LABEL_Y, label);
-    u->drawStr(x, TP_CTRL_VALUE_Y, value);
+    u->drawStr(labelX, TP_CTRL_LABEL_Y, label);
+    u->drawStr(valueX, TP_CTRL_VALUE_Y, value);
     u->setDrawColor(1);
     return;
   }
   if (state == 2) {
     int rest = (int)strlen(value) - hlStart - hlLen;
-    int x2 = tpDrawSeg(u, value, 0, hlStart, x, TP_CTRL_VALUE_Y, false);
+    int x2 = tpDrawSeg(u, value, 0, hlStart, valueX, TP_CTRL_VALUE_Y, false);
     int x3 = tpDrawSeg(u, value, hlStart, hlLen, x2, TP_CTRL_VALUE_Y, true);
     tpDrawSeg(u, value, hlStart + hlLen, rest, x3, TP_CTRL_VALUE_Y, false);
-    u->drawStr(x, TP_CTRL_LABEL_Y, label);
+    u->drawStr(labelX, TP_CTRL_LABEL_Y, label);
     return;
   }
-  u->drawStr(x, TP_CTRL_LABEL_Y, label);
-  u->drawStr(x, TP_CTRL_VALUE_Y, value);
+  u->drawStr(labelX, TP_CTRL_LABEL_Y, label);
+  u->drawStr(valueX, TP_CTRL_VALUE_Y, value);
 }
 
 // Layout (6 rows, small 5x7 font):
@@ -670,8 +691,8 @@ static void tpDrawControl(U8G2 *u, int x, const char *label, const char *value,
 //   Last   --.--        Best   --.--
 //   Laps   ---          Best 3 --.--
 //   Time   --:--/Start  RSSI   62
-//   RSSI   Min Lap      Start
-//   145/205  10s        Race
+//   [  RSSI  ][ Min Lap ][  Start  ]   (3 equal elements, each screen/3 wide)
+//   [ 145/205 ][   10s   ][  Race   ]   (label + value centered in each)
 void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
   char v[16];
@@ -760,14 +781,14 @@ void Menu::drawTimerMenu() {
   char crossVal[12];
   snprintf(crossVal, sizeof(crossVal), "%d/%d", integrated->getEnterRSSI(),
            integrated->getExitRSSI());
-  tpDrawControl(&u8g2, TP_C1_X, "RSSI", crossVal, rssiState, hlStart, hlLen);
+  tpDrawControl(&u8g2, 0, "RSSI", crossVal, rssiState, hlStart, hlLen);
 
   char minVal[6];
   snprintf(minVal, sizeof(minVal), "%ds", integrated->getMinLapSeconds());
-  tpDrawControl(&u8g2, TP_C2_X, "Min Lap", minVal, minLapState, hlStart, hlLen);
+  tpDrawControl(&u8g2, TP_COL_W, "Min Lap", minVal, minLapState, hlStart, hlLen);
 
   const char *startVal = integrated->raceActive() ? "Stop" : "Race";
-  tpDrawControl(&u8g2, TP_C3_X, "Start", startVal, startState, 0, 0);
+  tpDrawControl(&u8g2, 2 * TP_COL_W, "Start", startVal, startState, 0, 0);
 }
 
 // ENTER on the timer page: act on the currently selected control.
@@ -801,9 +822,10 @@ void Menu::timerCtrlSelect() {
   if (commit) {
     integrated->saveTimingSettings();
   }
-  if (_timerCtrlCursor != TP_CTRL_START && settings->buzzer.get()) {
-    buzzer->buzz();
-  }
+  // No beep here: the generic SELECT handler already beeps once on button
+  // PRESS (see handleButtons). Beeping again on release made Enter sound like
+  // a double beep. The Start control's race beeps (countdown / Go! / stop)
+  // come from IntegratedMode::oledSelectTimer, not here.
 }
 
 // PREV/NEXT while editing a control: inc (next) / dec (prev) the value by 2.
