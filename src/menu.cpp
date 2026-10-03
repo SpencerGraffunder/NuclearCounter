@@ -562,10 +562,18 @@ void Menu::drawAboutMenu() {
 //   LX  left margin        LVX  left-column value right edge
 //   RCX right-col label    RX   right-column value right edge
 static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
-// Row y-positions (small 5x7 font, ~9px apart). The top four rows hold the
-// stats; the bottom two rows form the control block (label row + value row).
-static const int TP_ROW0_Y = 4, TP_ROW1_Y = 14, TP_ROW2_Y = 24, TP_ROW3_Y = 34;
-static const int TP_CTRL_LABEL_Y = 44, TP_CTRL_VALUE_Y = 54;
+// Row y-positions are 5x7 drawStr BASELINES (small 5x7 font, 10px apart). The
+// top four rows hold the stats; the bottom two rows form the control block
+// (label row + value row).
+//
+// GOTCHA (5x7 ascent, top clipping): u8g2_font_5x7 has ascent_A = 6, so a
+// drawStr at baseline y puts the top row of a cap/digit at y-6. Any baseline
+// below 6 therefore draws the top of the text off the top edge of the panel
+// (u8g2 clips to row 0), so the header looks cut off. The topmost baseline
+// here is 7 (glyph top at row 1) for that reason — do not move it back below
+// 7. The control block still fits: its highlight box ends at row 58 < 64.
+static const int TP_ROW0_Y = 7, TP_ROW1_Y = 17, TP_ROW2_Y = 27, TP_ROW3_Y = 37;
+static const int TP_CTRL_LABEL_Y = 47, TP_CTRL_VALUE_Y = 57;
 // Control column x-positions (5x7 is monospace, 5px per char):
 //   col0 Cross RSSI ("RSSI" / "145/205"), col1 Min Lap ("Min Lap" / "10s"),
 //   col2 Start ("Start" / "Race").
@@ -597,6 +605,14 @@ static void tpFmtSessionMs(uint32_t ms, char *buf, size_t n) {
 // Draw a segment of `str` (chars [start, start+len)) at (x, y). When
 // `highlight` is set, a white box is drawn behind it and the text is black;
 // otherwise the text is the normal white-on-black. Returns the next x.
+//
+// GOTCHA (5x7 ascent): u8g2_font_5x7 has ascent_A = 6, so drawStr(x, y) puts
+// the top row of a cap/digit at y-6, NOT at y. A highlight box therefore has to
+// start at y-6 (minus a margin) — starting it at y (or y-1) leaves the top 5
+// rows of the glyph outside the box, so black-on-white text is drawn
+// black-on-black above the box and the top of the value is unreadable. Same
+// reason the main menu's selection box (drawSelectionMenu) reserves 16px per
+// row and baselines the text 12px below the box top.
 static int tpDrawSeg(U8G2 *u, const char *str, int start, int len, int x, int y,
                      bool highlight) {
   if (len <= 0) return x;
@@ -605,7 +621,7 @@ static int tpDrawSeg(U8G2 *u, const char *str, int start, int len, int x, int y,
   memcpy(tmp, str + start, n);
   tmp[n] = '\0';
   if (highlight) {
-    u->drawBox(x, y, len * 5, 8);   // white box (default draw colour is 1)
+    u->drawBox(x, y - 7, len * 5, 10);  // cover rows y-7..y+2 (glyph is y-6..y)
     u->setDrawColor(0);
     u->drawStr(x, y, tmp);          // black text
     u->setDrawColor(1);
@@ -625,8 +641,12 @@ static void tpDrawControl(U8G2 *u, int x, const char *label, const char *value,
   int maxW = u->getStrWidth(label);
   if (u->getStrWidth(value) > maxW) maxW = u->getStrWidth(value);
   if (state == 1) {
-    u->drawBox(x, TP_CTRL_LABEL_Y - 1, maxW + 1,
-               (TP_CTRL_VALUE_Y - TP_CTRL_LABEL_Y) + 8);
+    // Box must span from 1px above the label's glyph top (label baseline - 6 -
+    // 1) to 2px below the value's glyph bottom (value baseline + 2). See the
+    // 5x7-ascent GOTCHA on tpDrawSeg: baselines are 6px below each glyph top.
+    int boxTop = TP_CTRL_LABEL_Y - 7;
+    int boxBottom = TP_CTRL_VALUE_Y + 2;
+    u->drawBox(x, boxTop, maxW + 1, boxBottom - boxTop);
     u->setDrawColor(0);
     u->drawStr(x, TP_CTRL_LABEL_Y, label);
     u->drawStr(x, TP_CTRL_VALUE_Y, value);
