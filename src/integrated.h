@@ -69,6 +69,29 @@ public:
   // Status-page data
   uint16_t frequencyMhz() const { return _timing.getCurrentFrequency(); }
   uint8_t rssi() const { return _timing.getCurrentRSSI(); }
+
+  // Timer-page control values (live on the timing engine; persisted via the
+  // NVS "sfos" namespace, the same store the web UI writes). Cross RSSI is the
+  // enter/exit threshold pair (enter must stay > exit); min lap is whole
+  // seconds (0 = disabled).
+  int getEnterRSSI() const { return _timing.getEnterRssi(); }
+  int getExitRSSI() const { return _timing.getExitRssi(); }
+  void setEnterRSSI(int v) { _timing.setEnterRssi((uint8_t)v); }
+  void setExitRSSI(int v) { _timing.setExitRssi((uint8_t)v); }
+  int getMinLapSeconds() const { return (int)(_timing.getMinLapMs() / 1000); }
+  void setMinLapSeconds(int s) { _timing.setMinLapMs((uint32_t)s * 1000); }
+  // Persist band/channel/RSSI thresholds/min-lap to NVS (matches the web's
+  // save-on-change).
+  void saveTimingSettings() { _timingSettings.saveSettings(&_timing); }
+
+  // Countdown / GO state for the Time value box. The pre-start countdown and
+  // "Go!" render in the elapsed-time value box instead of a separate status
+  // line: during the countdown the box shows "Start in N", then "Go!" for the
+  // first ~1.2s of the race, then the running elapsed clock.
+  // Seconds remaining on the pre-start countdown (0 when not counting down).
+  int countdownRemaining() const;
+  // True for the ~1.2s after a race starts (the "Go!" window).
+  bool goFlashActive() const;
   // Lap stats for the timer page, from the web-shared lap history. Return 0
   // for "no data yet" (the page renders that as a dash).
   uint32_t lastLapMs() const;

@@ -95,7 +95,20 @@ void Menu::handleButtons() {
   // Move between menu items
   if (nextPressed == HIGH || prevPressed == HIGH) {
     int direction = (nextPressed == HIGH) ? 1 : -1;
-    menus[menuIndex].menuIndex = (menus[menuIndex].menuIndex + direction + menus[menuIndex].menuItemsLength) % menus[menuIndex].menuItemsLength;
+#ifdef INTEGRATED
+    if (menuIndex == WIFI) {
+      // Timer page: PREV/NEXT drive the control block — move the cursor
+      // between the three controls, or inc/dec the value by 2 while editing.
+      if (_timerCtrlEditing) {
+        timerCtrlAdjust(direction);
+      } else {
+        _timerCtrlCursor = (_timerCtrlCursor + direction + 3) % 3;
+      }
+    } else
+#endif
+    {
+      menus[menuIndex].menuIndex = (menus[menuIndex].menuIndex + direction + menus[menuIndex].menuItemsLength) % menus[menuIndex].menuItemsLength;
+    }
 
     // Sound buzzer on button press if necessary
     if (settings->buzzer.get()) buzzer->buzz();
@@ -166,19 +179,22 @@ void Menu::handleButtons() {
             // boot); the splash only matters on the boot-failure fallback
             // where the slow bring-up runs while it is on screen
             menuIndex = WIFI;
+            _timerCtrlCursor = 0;     // start the cursor on the Cross RSSI control
+            _timerCtrlEditing = false;
+            _timerCtrlEditField = 0;
             drawStartingSplash();
             if (!integrated->enterTimer()) {
               menuIndex = MAIN;  // AP failed to start
             }
             break;
-          case 2: menuIndex = ABOUT; break;  // Go to about menu
+          case 2: menuIndex = SETTINGS; break;  // Go to settings menu
         }
         break;
       case SCAN:  // Band toggle on the scanner page
         module->lowband.set(!module->lowband.get());
         break;
-      case WIFI:  // Timer page: Enter toggles the race session (start/stop)
-        integrated->oledSelectTimer();
+      case WIFI:  // Timer page: Enter acts on the selected control
+        timerCtrlSelect();
         break;
       case SETTINGS:  // Handle SELECT on settings menu
         switch (menus[SETTINGS].menuIndex) {
@@ -189,7 +205,7 @@ void Menu::handleButtons() {
         break;
       case ADVANCED:  // Handle SELECT on advanced menu
         switch (menus[ADVANCED].menuIndex) {
-          case 0: menuIndex = SETTINGS; break;     // Go to settings menu
+          case 0: menuIndex = ABOUT; break;        // Go to about menu
           case 1: menuIndex = CALIBRATION; break;  // Go to calibration menu
         }
         break;
@@ -546,6 +562,15 @@ void Menu::drawAboutMenu() {
 //   LX  left margin        LVX  left-column value right edge
 //   RCX right-col label    RX   right-column value right edge
 static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
+// Row y-positions (small 5x7 font, ~9px apart). The top four rows hold the
+// stats; the bottom two rows form the control block (label row + value row).
+static const int TP_ROW0_Y = 4, TP_ROW1_Y = 14, TP_ROW2_Y = 24, TP_ROW3_Y = 34;
+static const int TP_CTRL_LABEL_Y = 44, TP_CTRL_VALUE_Y = 54;
+// Control column x-positions (5x7 is monospace, 5px per char):
+//   col0 Cross RSSI ("RSSI" / "145/205"), col1 Min Lap ("Min Lap" / "10s"),
+//   col2 Start ("Start" / "Race").
+static const int TP_C1_X = 4, TP_C2_X = 44, TP_C3_X = 84;
+static const int TP_CTRL_RSSI = 0, TP_CTRL_MINLAP = 1, TP_CTRL_START = 2;
 
 // 2-decimal lap value ("12.34"), no trailing "s".
 static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
@@ -569,53 +594,225 @@ static void tpFmtSessionMs(uint32_t ms, char *buf, size_t n) {
            (unsigned long)(total_s % 60));
 }
 
-// Layout (5 rows, small 5x7 font, ~11px apart, bottom band left free):
+// Draw a segment of `str` (chars [start, start+len)) at (x, y). When
+// `highlight` is set, a white box is drawn behind it and the text is black;
+// otherwise the text is the normal white-on-black. Returns the next x.
+static int tpDrawSeg(U8G2 *u, const char *str, int start, int len, int x, int y,
+                     bool highlight) {
+  if (len <= 0) return x;
+  char tmp[16];
+  int n = (len < 15) ? len : 15;
+  memcpy(tmp, str + start, n);
+  tmp[n] = '\0';
+  if (highlight) {
+    u->drawBox(x, y, len * 5, 8);   // white box (default draw colour is 1)
+    u->setDrawColor(0);
+    u->drawStr(x, y, tmp);          // black text
+    u->setDrawColor(1);
+  } else {
+    u->drawStr(x, y, tmp);          // white text
+  }
+  return x + len * 5;
+}
+
+// Draw one control element (label + value) in a highlight state:
+//   0 = not selected (normal), 1 = selected, not editing (a white box covers
+//       both lines, text black), 2 = editing (only the numeric part of the
+//       value is highlighted). For state 2, hlStart/hlLen identify which chars
+//       of `value` make up the number (e.g. the "10" of "10s").
+static void tpDrawControl(U8G2 *u, int x, const char *label, const char *value,
+                          int state, int hlStart, int hlLen) {
+  int maxW = u->getStrWidth(label);
+  if (u->getStrWidth(value) > maxW) maxW = u->getStrWidth(value);
+  if (state == 1) {
+    u->drawBox(x, TP_CTRL_LABEL_Y - 1, maxW + 1,
+               (TP_CTRL_VALUE_Y - TP_CTRL_LABEL_Y) + 8);
+    u->setDrawColor(0);
+    u->drawStr(x, TP_CTRL_LABEL_Y, label);
+    u->drawStr(x, TP_CTRL_VALUE_Y, value);
+    u->setDrawColor(1);
+    return;
+  }
+  if (state == 2) {
+    int rest = (int)strlen(value) - hlStart - hlLen;
+    int x2 = tpDrawSeg(u, value, 0, hlStart, x, TP_CTRL_VALUE_Y, false);
+    int x3 = tpDrawSeg(u, value, hlStart, hlLen, x2, TP_CTRL_VALUE_Y, true);
+    tpDrawSeg(u, value, hlStart + hlLen, rest, x3, TP_CTRL_VALUE_Y, false);
+    u->drawStr(x, TP_CTRL_LABEL_Y, label);
+    return;
+  }
+  u->drawStr(x, TP_CTRL_LABEL_Y, label);
+  u->drawStr(x, TP_CTRL_VALUE_Y, value);
+}
+
+// Layout (6 rows, small 5x7 font):
 //   WiFi Timer          192.168.8.1
 //   Last   --.--        Best   --.--
 //   Laps   ---          Best 3 --.--
-//   Time   --:--        Enter=Start
-//   <status text line>
+//   Time   --:--/Start  RSSI   62
+//   RSSI   Min Lap      Start
+//   145/205  10s        Race
 void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
-  char v[12];
+  char v[16];
 
   // Header: title left, AP IP right. The IP is held in a local String so its
   // c_str() stays valid for the drawStr below (a temporary String's c_str()
   // dangles and the IP would not render).
-  u8g2.drawStr(TP_LX, 8, "WiFi Timer");
+  u8g2.drawStr(TP_LX, TP_ROW0_Y, "WiFi Timer");
   String ip = integrated->apIP();
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ip.c_str()), 8, ip.c_str());
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ip.c_str()), TP_ROW0_Y, ip.c_str());
 
   // Last | Best
-  u8g2.drawStr(TP_LX, 19, "Last");
+  u8g2.drawStr(TP_LX, TP_ROW1_Y, "Last");
   tpFmtLapMs(integrated->lastLapMs(), v, sizeof(v));
-  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 19, v);
-  u8g2.drawStr(TP_RCX, 19, "Best");
+  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), TP_ROW1_Y, v);
+  u8g2.drawStr(TP_RCX, TP_ROW1_Y, "Best");
   tpFmtLapMs(integrated->bestLapMs(), v, sizeof(v));
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 19, v);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), TP_ROW1_Y, v);
 
   // Laps | Best 3
-  u8g2.drawStr(TP_LX, 30, "Laps");
+  u8g2.drawStr(TP_LX, TP_ROW2_Y, "Laps");
   int laps = integrated->sessionLapCount();
   if (laps <= 0) {
     snprintf(v, sizeof(v), "---");
   } else {
     snprintf(v, sizeof(v), "%d", laps);
   }
-  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 30, v);
-  u8g2.drawStr(TP_RCX, 30, "Best 3");
+  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), TP_ROW2_Y, v);
+  u8g2.drawStr(TP_RCX, TP_ROW2_Y, "Best 3");
   tpFmtLapMs(integrated->best3ConsecutiveMs(), v, sizeof(v));
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 30, v);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), TP_ROW2_Y, v);
 
-  // Time | Enter=Start/Stop
-  u8g2.drawStr(TP_LX, 41, "Time");
-  tpFmtSessionMs(integrated->sessionElapsedMs(), v, sizeof(v));
-  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 41, v);
-  const char *ent = integrated->raceActive() ? "Enter=Stop" : "Enter=Start";
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ent), 41, ent);
+  // Time | RSSI (live signal). The elapsed-time value box doubles as the
+  // countdown display: during the pre-start countdown it shows "Start in N"
+  // (which fills the whole left column, so the "Time" label is suppressed),
+  // then "Go!" for the first ~1.2s, then the running clock.
+  if (integrated->countdownActive()) {
+    snprintf(v, sizeof(v), "Start in %d", integrated->countdownRemaining());
+    u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), TP_ROW3_Y, v);
+  } else if (integrated->goFlashActive()) {
+    u8g2.drawStr(TP_LVX - u8g2.getStrWidth("Go!"), TP_ROW3_Y, "Go!");
+  } else {
+    u8g2.drawStr(TP_LX, TP_ROW3_Y, "Time");
+    tpFmtSessionMs(integrated->sessionElapsedMs(), v, sizeof(v));
+    u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), TP_ROW3_Y, v);
+  }
 
-  // Status line (countdown / Go! / Racing / Ready)
-  u8g2.drawStr(TP_LX, 52, integrated->statusText());
+  // Current RSSI (0-255) readout in the right column. Throttled to ~5 Hz so a
+  // live signal does not force a full I2C frame push every loop (which would
+  // saturate the bus and throttle the UI loop).
+  u8g2.drawStr(TP_RCX, TP_ROW3_Y, "RSSI");
+  static uint8_t shownRssi = 0;
+  static uint32_t nextRssiUpdate = 0;
+  if (millis() >= nextRssiUpdate) {
+    shownRssi = integrated->rssi();
+    nextRssiUpdate = millis() + 200;
+  }
+  snprintf(v, sizeof(v), "%d", (int)shownRssi);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), TP_ROW3_Y, v);
+
+  // ---- Control block: Cross RSSI | Min Lap | Start ----
+  // Which element is highlighted, and how (1 = both lines, 2 = numeric only).
+  int rssiState = 0, minLapState = 0, startState = 0, hlStart = 0, hlLen = 0;
+  if (!_timerCtrlEditing) {
+    if (_timerCtrlCursor == TP_CTRL_RSSI) rssiState = 1;
+    else if (_timerCtrlCursor == TP_CTRL_MINLAP) minLapState = 1;
+    else startState = 1;
+  } else if (_timerCtrlCursor == TP_CTRL_RSSI) {
+    char enter[4], exitv[4];
+    snprintf(enter, sizeof(enter), "%d", integrated->getEnterRSSI());
+    snprintf(exitv, sizeof(exitv), "%d", integrated->getExitRSSI());
+    rssiState = 2;
+    if (_timerCtrlEditField == 0) {
+      hlStart = 0; hlLen = (int)strlen(enter);      // highlight the enter number
+    } else {
+      hlStart = (int)strlen(enter) + 1;             // skip "E/"
+      hlLen = (int)strlen(exitv);                   // highlight the exit number
+    }
+  } else if (_timerCtrlCursor == TP_CTRL_MINLAP) {
+    char sec[4];
+    snprintf(sec, sizeof(sec), "%d", integrated->getMinLapSeconds());
+    minLapState = 2;
+    hlStart = 0; hlLen = (int)strlen(sec);          // highlight the number (not "s")
+  }
+
+  char crossVal[12];
+  snprintf(crossVal, sizeof(crossVal), "%d/%d", integrated->getEnterRSSI(),
+           integrated->getExitRSSI());
+  tpDrawControl(&u8g2, TP_C1_X, "RSSI", crossVal, rssiState, hlStart, hlLen);
+
+  char minVal[6];
+  snprintf(minVal, sizeof(minVal), "%ds", integrated->getMinLapSeconds());
+  tpDrawControl(&u8g2, TP_C2_X, "Min Lap", minVal, minLapState, hlStart, hlLen);
+
+  const char *startVal = integrated->raceActive() ? "Stop" : "Race";
+  tpDrawControl(&u8g2, TP_C3_X, "Start", startVal, startState, 0, 0);
+}
+
+// ENTER on the timer page: act on the currently selected control.
+//   Cross RSSI: enter -> begin editing the enter value; enter -> switch to the
+//               exit value; enter -> commit + exit edit.
+//   Min Lap:    enter -> toggle edit (second enter commits + exits).
+//   Start:      enter -> start/stop the race (its own beeps/countdown).
+// On commit the timing settings are persisted to NVS (matching the web UI).
+void Menu::timerCtrlSelect() {
+  bool commit = false;
+  switch (_timerCtrlCursor) {
+    case TP_CTRL_RSSI:
+      if (!_timerCtrlEditing) {
+        _timerCtrlEditing = true;
+        _timerCtrlEditField = 0;
+      } else if (_timerCtrlEditField == 0) {
+        _timerCtrlEditField = 1;
+      } else {
+        _timerCtrlEditing = false;
+        commit = true;
+      }
+      break;
+    case TP_CTRL_MINLAP:
+      _timerCtrlEditing = !_timerCtrlEditing;
+      commit = !_timerCtrlEditing;
+      break;
+    case TP_CTRL_START:
+      integrated->oledSelectTimer();  // start/stop the race session
+      break;
+  }
+  if (commit) {
+    integrated->saveTimingSettings();
+  }
+  if (_timerCtrlCursor != TP_CTRL_START && settings->buzzer.get()) {
+    buzzer->buzz();
+  }
+}
+
+// PREV/NEXT while editing a control: inc (next) / dec (prev) the value by 2.
+// Cross RSSI keeps the enter > exit invariant; min lap is clamped 0..60 s.
+void Menu::timerCtrlAdjust(int direction) {
+  int step = 2 * direction;
+  if (_timerCtrlCursor == TP_CTRL_RSSI) {
+    if (_timerCtrlEditField == 0) {
+      int e = integrated->getEnterRSSI();
+      int x = integrated->getExitRSSI();
+      e += step;
+      if (e > 255) e = 255;
+      if (e < x + 2) e = x + 2;  // keep enter strictly above exit
+      integrated->setEnterRSSI(e);
+    } else {
+      int e = integrated->getEnterRSSI();
+      int x = integrated->getExitRSSI();
+      x += step;
+      if (x > e - 2) x = e - 2;  // keep exit strictly below enter
+      if (x < 0) x = 0;
+      integrated->setExitRSSI(x);
+    }
+  } else if (_timerCtrlCursor == TP_CTRL_MINLAP) {
+    int sec = integrated->getMinLapSeconds();
+    sec += step;
+    if (sec < 0) sec = 0;
+    if (sec > 60) sec = 60;
+    integrated->setMinLapSeconds(sec);
+  }
 }
 
 // Shown immediately when the user selects "WiFi Timer", before the
@@ -689,7 +886,7 @@ void Menu::initMenus() {
   // these rows open the pages that temporarily override it.
   mainMenuItems[0] = { "Scanner", bitmap_Scan };
   mainMenuItems[1] = { "WiFi Timer", bitmap_Wifi };
-  mainMenuItems[2] = { "About", bitmap_About };
+  mainMenuItems[2] = { "Settings", bitmap_Settings };
 #else
   // Main menu
   mainMenuItems[0] = { "Scan", bitmap_Scan };
@@ -719,7 +916,7 @@ void Menu::initMenus() {
 #ifdef INTEGRATED
   // Advanced menu (integrated): 2 rows (the 3-row display limit is enforced
   // in the comment above)
-  advancedMenuItems[0] = { "Settings", bitmap_Settings };
+  advancedMenuItems[0] = { "About", bitmap_About };
   advancedMenuItems[1] = { "Calibration", bitmap_Calibration };
 #else
   // Advanced menu

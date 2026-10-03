@@ -258,6 +258,16 @@ uint32_t IntegratedMode::sessionElapsedMs() const {
   return millis() - _raceStartTime;
 }
 
+int IntegratedMode::countdownRemaining() const {
+  if (!_countdownActive) {
+    return 0;
+  }
+  int rem = RACE_COUNTDOWN_SECONDS - (int)((millis() - _countdownStartMs) / 1000);
+  return (rem < 1) ? 1 : rem;
+}
+
+bool IntegratedMode::goFlashActive() const { return millis() < _goFlashUntilMs; }
+
 // Advance the race session state machine and refresh the status line. Called
 // from process() every loop, so it runs regardless of which menu page is up.
 void IntegratedMode::tickRace() {

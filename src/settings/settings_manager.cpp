@@ -47,17 +47,22 @@ bool SettingsManager::loadSettings(TimingCore* timingCore) {
     if (enter_rssi == 0) enter_rssi = ENTER_RSSI;
     if (exit_rssi == 0) exit_rssi = EXIT_RSSI;
 
+    // Minimum lap time (ms). Absent on older saves -> 0 (disabled).
+    uint32_t min_lap_ms = prefs.getUInt("min_lap_ms", 0);
+
     prefs.end();
 
     // Apply loaded settings to timing core
     timingCore->setRX5808Settings(band, channel);
     timingCore->setEnterRssi(enter_rssi);
     timingCore->setExitRssi(exit_rssi);
+    timingCore->setMinLapMs(min_lap_ms);
 
     Serial.println("\n=== Loaded Settings from Flash ===");
     Serial.printf("Band: %d, Channel: %d\n", band, channel + 1);
     Serial.printf("Frequency: %d MHz\n", timingCore->getCurrentFrequency());
     Serial.printf("Enter RSSI: %d, Exit RSSI: %d\n", enter_rssi, exit_rssi);
+    Serial.printf("Min Lap: %lu ms\n", (unsigned long)min_lap_ms);
     Serial.println("===================================\n");
 
     return true;
@@ -107,11 +112,12 @@ bool SettingsManager::saveSettings(TimingCore* timingCore) {
     prefs.putUChar("exit_rssi", exit_rssi);
     // Keep legacy threshold for backward compatibility
     prefs.putUChar("threshold", enter_rssi);
+    prefs.putUInt("min_lap_ms", timingCore->getMinLapMs());
 
     prefs.end();
 
-    Serial.printf("Settings saved to flash: Band=%d, Channel=%d, Enter RSSI=%d, Exit RSSI=%d\n",
-                  band, channel, enter_rssi, exit_rssi);
+    Serial.printf("Settings saved to flash: Band=%d, Channel=%d, Enter RSSI=%d, Exit RSSI=%d, MinLap=%lu ms\n",
+                  band, channel, enter_rssi, exit_rssi, (unsigned long)timingCore->getMinLapMs());
 
     return true;
 }

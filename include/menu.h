@@ -109,6 +109,16 @@ private:
   void drawTimerMenu();
   void drawStartingSplash();
   void calibrateWithTiming(bool high);
+
+  // Timer-page control block (Cross RSSI / Min Lap / Start). The cursor moves
+  // between the three with PREV/NEXT; ENTER enters edit mode (or toggles the
+  // race for the Start control). While editing, PREV/NEXT inc/dec the value by
+  // 2 and ENTER commits + exits. State is reset each time the page is entered.
+  void timerCtrlSelect();
+  void timerCtrlAdjust(int direction);
+  int _timerCtrlCursor = 0;   // 0=Cross RSSI, 1=Min Lap, 2=Start
+  bool _timerCtrlEditing = false;
+  int _timerCtrlEditField = 0;  // Cross RSSI: 0=enter, 1=exit
 #endif
 
 #ifdef SH1106
