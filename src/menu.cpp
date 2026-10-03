@@ -276,6 +276,23 @@ void Menu::clearBuffer() {
 
 // Send data to display buffer
 void Menu::sendBuffer() {
+  // Only push to the OLED when the frame actually changed. A full 128x64 I2C
+  // frame takes ~30ms, which throttled the UI loop to ~27 iters/s and made
+  // navigation feel sluggish. Most menu frames are static between button
+  // presses (and the timer/scan values only change when they change), so this
+  // lets the loop run at full speed whenever the display content is unchanged.
+  static uint8_t lastFrame[DISPLAY_WIDTH * DISPLAY_HEIGHT / 8];
+  static bool firstFrame = true;
+  const uint8_t *buf = (const uint8_t *)u8g2.getBufferPtr();
+  uint32_t size = u8g2.getBufferTileWidth() * u8g2.getBufferTileHeight() * 8;
+  if (size > sizeof(lastFrame)) {
+    size = sizeof(lastFrame);  // safety clamp
+  }
+  if (!firstFrame && memcmp(buf, lastFrame, size) == 0) {
+    return;  // unchanged - skip the I2C push
+  }
+  memcpy(lastFrame, buf, size);
+  firstFrame = false;
   u8g2.sendBuffer();
 }
 
@@ -507,16 +524,18 @@ void Menu::drawScanMenu() {
 
 // Draw static content on about menu
 void Menu::drawAboutMenu() {
+  // 5 lines, sized to fit 128x64 (the two credit lines are 30/26 chars, so
+  // they need the small 4x6 font to fit on one line each).
   u8g2.setFont(u8g2_font_7x13B_tf);
-  const char *name = "NuclearCounter";
-  u8g2.drawStr(xTextCentre(name, 7), 12, name);
-
-  u8g2.setFont(u8g2_font_7x13_tf);
-  u8g2.drawStr(xTextCentre(VERSION, 7), 30, VERSION);
+  u8g2.drawStr(xTextCentre(APP_NAME, 7), 13, APP_NAME);
 
   u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(xTextCentre(BASED_ON, 5), 46, BASED_ON);
-  u8g2.drawStr(xTextCentre(AUTHOR, 5), 56, AUTHOR);
+  u8g2.drawStr(xTextCentre(APP_BY, 5), 25, APP_BY);
+  u8g2.drawStr(xTextCentre(VERSION, 5), 37, VERSION);
+
+  u8g2.setFont(u8g2_font_4x6_tf);
+  u8g2.drawStr(xTextCentre(CREDIT_1, 4), 50, CREDIT_1);
+  u8g2.drawStr(xTextCentre(CREDIT_2, 4), 61, CREDIT_2);
 }
 
 #ifdef INTEGRATED
@@ -524,18 +543,17 @@ void Menu::drawAboutMenu() {
 // SH1306 panels need safe margins: a ~2px left glass offset and a 6px right
 // guard (image cols 122-127 are never driven). These anchors keep every glyph
 // well inside the safe area:
-//   LX  left margin        MID  left-column value right edge
+//   LX  left margin        LVX  left-column value right edge
 //   RCX right-col label    RX   right-column value right edge
-static const int TP_LX = 4, TP_MID = 58, TP_RCX = 60, TP_RX = 120;
+static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
 
-// 1-decimal lap value ("12.3s") — 5 chars, so it fits beside the "Best 3"
-// label. (2 decimals would collide with the label in the right column.)
+// 2-decimal lap value ("12.34"), no trailing "s".
 static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
   if (ms == 0) {
-    snprintf(buf, n, "--.-");
+    snprintf(buf, n, "--.--");
   } else {
-    snprintf(buf, n, "%lu.%lus", (unsigned long)(ms / 1000),
-             (unsigned long)((ms % 1000) / 100));
+    snprintf(buf, n, "%lu.%02lu", (unsigned long)(ms / 1000),
+             (unsigned long)((ms % 1000) / 10));
   }
 }
 
@@ -561,41 +579,43 @@ void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
   char v[12];
 
-  // Header: title left, AP IP right
-  u8g2.drawStr(TP_LX, 2, "WiFi Timer");
-  const char *ip = integrated->apIP().c_str();
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ip), 2, ip);
+  // Header: title left, AP IP right. The IP is held in a local String so its
+  // c_str() stays valid for the drawStr below (a temporary String's c_str()
+  // dangles and the IP would not render).
+  u8g2.drawStr(TP_LX, 8, "WiFi Timer");
+  String ip = integrated->apIP();
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ip.c_str()), 8, ip.c_str());
 
   // Last | Best
-  u8g2.drawStr(TP_LX, 13, "Last");
+  u8g2.drawStr(TP_LX, 19, "Last");
   tpFmtLapMs(integrated->lastLapMs(), v, sizeof(v));
-  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 13, v);
-  u8g2.drawStr(TP_RCX, 13, "Best");
+  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 19, v);
+  u8g2.drawStr(TP_RCX, 19, "Best");
   tpFmtLapMs(integrated->bestLapMs(), v, sizeof(v));
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 13, v);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 19, v);
 
   // Laps | Best 3
-  u8g2.drawStr(TP_LX, 24, "Laps");
+  u8g2.drawStr(TP_LX, 30, "Laps");
   int laps = integrated->sessionLapCount();
   if (laps <= 0) {
     snprintf(v, sizeof(v), "---");
   } else {
     snprintf(v, sizeof(v), "%d", laps);
   }
-  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 24, v);
-  u8g2.drawStr(TP_RCX, 24, "Best 3");
+  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 30, v);
+  u8g2.drawStr(TP_RCX, 30, "Best 3");
   tpFmtLapMs(integrated->best3ConsecutiveMs(), v, sizeof(v));
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 24, v);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 30, v);
 
   // Time | Enter=Start/Stop
-  u8g2.drawStr(TP_LX, 35, "Time");
+  u8g2.drawStr(TP_LX, 41, "Time");
   tpFmtSessionMs(integrated->sessionElapsedMs(), v, sizeof(v));
-  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 35, v);
+  u8g2.drawStr(TP_LVX - u8g2.getStrWidth(v), 41, v);
   const char *ent = integrated->raceActive() ? "Enter=Stop" : "Enter=Start";
-  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ent), 35, ent);
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ent), 41, ent);
 
-  // Status line (countdown / Go! / Racing / Ready / lap flash)
-  u8g2.drawStr(TP_LX, 46, integrated->statusText());
+  // Status line (countdown / Go! / Racing / Ready)
+  u8g2.drawStr(TP_LX, 52, integrated->statusText());
 }
 
 // Shown immediately when the user selects "WiFi Timer", before the
@@ -667,7 +687,7 @@ void Menu::initMenus() {
   // add more items to any menu — extra rows render off-screen.
   // Main menu: the RotorHazard USB node is ALWAYS ON (it is not a menu item);
   // these rows open the pages that temporarily override it.
-  mainMenuItems[0] = { "Scan", bitmap_Scan };
+  mainMenuItems[0] = { "Scanner", bitmap_Scan };
   mainMenuItems[1] = { "WiFi Timer", bitmap_Wifi };
   mainMenuItems[2] = { "About", bitmap_About };
 #else

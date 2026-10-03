@@ -78,7 +78,6 @@ void IntegratedMode::startNode() {
   _timingSettings.loadSettings(&_timing);  // persisted band/channel/thresholds
   _timing.setActivated(true);
   _mode = IntMode::NODE;
-  Serial.println(F("Node baseline active"));
 }
 
 // Scanner page entry: pause the node so the scan task owns the RX5808.
@@ -216,13 +215,21 @@ void IntegratedMode::addLap(const LapData &lap) {
   while (_laps.size() > 100) {
     _laps.erase(_laps.begin());
   }
-  // Lap-crossing feedback: beep + a transient status flash. Works in any menu
-  // mode (the pilot hears it), not just while the timer page is up.
-  if (_buzzer) {
-    _buzzer->buzz();
+  // Lap feedback (works in any menu mode, not just the timer page):
+  // a new best-3 (fastest 3 consecutive) beeps DOUBLE, any other lap beeps
+  // once. The lap count itself is shown in the grid, not the status line.
+  uint32_t b3 = best3ConsecutiveMs();
+  bool newBest3 = (b3 > 0) && (_lastBest3Ms == 0 || b3 < _lastBest3Ms);
+  if (b3 > 0) {
+    _lastBest3Ms = b3;
   }
-  snprintf(_statusFlash, sizeof(_statusFlash), "Lap %d", (int)_laps.size());
-  _statusFlashUntilMs = millis() + RACE_LAP_FLASH_MS;
+  if (_buzzer) {
+    if (newBest3) {
+      _buzzer->doubleBuzz();
+    } else {
+      _buzzer->buzz();
+    }
+  }
 }
 
 // SELECT on the WiFi timer page: idle -> start (countdown), countdown ->
@@ -256,12 +263,18 @@ uint32_t IntegratedMode::sessionElapsedMs() const {
 void IntegratedMode::tickRace() {
   uint32_t now = millis();
 
-  // A race just started (from the web, or the countdown completing below):
-  // flash "Go!" and beep once. This is the single Go-beep source for both.
+  // Race start (from the web, or the countdown completing below): GO flash +
+  // TRIPLE beep. Race stop (either path): TRIPLE beep. These transitions cover
+  // both the OLED and web controllers since both drive _raceActive.
   if (_raceActive && !_prevRaceActive) {
     _goFlashUntilMs = now + RACE_GO_FLASH_MS;
+    _lastBest3Ms = 0;  // new session: re-detect the first best-3
     if (_buzzer) {
-      _buzzer->buzz();
+      _buzzer->tripleBuzz();
+    }
+  } else if (!_raceActive && _prevRaceActive) {
+    if (_buzzer) {
+      _buzzer->tripleBuzz();
     }
   }
   _prevRaceActive = _raceActive;
@@ -283,6 +296,7 @@ void IntegratedMode::tickRace() {
       _raceActive = true;
       _raceStartTime = now;
       _laps.clear();
+      _lastBest3Ms = 0;
       _goFlashUntilMs = now + RACE_GO_FLASH_MS;  // show "Go!" immediately
     }
   }
@@ -299,12 +313,6 @@ void IntegratedMode::tickRace() {
              (now < _goFlashUntilMs) ? "Go!" : "Racing");
   } else {
     snprintf(_statusBuf, sizeof(_statusBuf), "Ready");
-  }
-
-  // A transient lap flash (set in addLap) overrides the base status.
-  if (now < _statusFlashUntilMs) {
-    strncpy(_statusBuf, _statusFlash, sizeof(_statusBuf) - 1);
-    _statusBuf[sizeof(_statusBuf) - 1] = '\0';
   }
 }
 

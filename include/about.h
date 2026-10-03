@@ -12,7 +12,9 @@
 #endif
 
 #define VERSION "v2.1.0-" BUILD_SHA
-#define AUTHOR "By Simon Eason"
-#define BASED_ON "Based on HzHunter"
+#define APP_NAME "NuclearCounter"
+#define APP_BY "by NuclearQuads"
+#define CREDIT_1 "Based on HzHunter by odddollar"
+#define CREDIT_2 "and StarForgeOS by RaceFPV"
 
 #endif // ABOUT_H

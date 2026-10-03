@@ -35,7 +35,6 @@ enum class IntMode {
 // pre-start sequence: pressing Start runs 5..1 then actually arms the race.
 static const int RACE_COUNTDOWN_SECONDS = 5;
 static const uint32_t RACE_GO_FLASH_MS = 1200;
-static const uint32_t RACE_LAP_FLASH_MS = 2000;
 
 class IntegratedMode {
 public:
@@ -130,8 +129,7 @@ private:
   int _countdownLastBeepSecond = 0;  // last countdown second that was beeps
   uint32_t _goFlashUntilMs = 0;
   bool _prevRaceActive = false;
-  char _statusFlash[16];             // transient message (e.g. "Lap 3")
-  uint32_t _statusFlashUntilMs = 0;
+  uint32_t _lastBest3Ms = 0;         // last seen best-3 (0 = none yet)
   mutable char _statusBuf[16];       // last computed status line
 };
 

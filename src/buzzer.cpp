@@ -20,6 +20,11 @@ void Buzzer::doubleBuzz() {
   xTaskCreate(_doubleBuzz, "buzz", BUZZER_STACK_SIZE, this, 1, NULL);
 }
 
+// Triple buzz with programmed period
+void Buzzer::tripleBuzz() {
+  xTaskCreate(_tripleBuzz, "buzz", BUZZER_STACK_SIZE, this, 1, NULL);
+}
+
 // Start constant buzzing alarm
 void Buzzer::startAlarm() {
   // Start alarm task only if not already running
@@ -67,6 +72,24 @@ void Buzzer::_doubleBuzz(void *parameter) {
   digitalWrite(buzzer->pin, HIGH);
   vTaskDelay(pdMS_TO_TICKS(BUZZ_DURATION));
   digitalWrite(buzzer->pin, LOW);
+
+  // Delete current task
+  vTaskDelete(NULL);
+}
+
+// Spawned in another thread to prevent blocking
+void Buzzer::_tripleBuzz(void *parameter) {
+  // Static cast weirdness to access pin variable
+  Buzzer *buzzer = static_cast<Buzzer *>(parameter);
+
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(buzzer->pin, HIGH);
+    vTaskDelay(pdMS_TO_TICKS(BUZZ_DURATION));
+    digitalWrite(buzzer->pin, LOW);
+    if (i < 2) {
+      vTaskDelay(pdMS_TO_TICKS(BUZZ_DELAY));
+    }
+  }
 
   // Delete current task
   vTaskDelete(NULL);

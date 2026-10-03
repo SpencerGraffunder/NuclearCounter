@@ -14,12 +14,14 @@ public:
   Buzzer(uint8_t p);
   void buzz();
   void doubleBuzz();
+  void tripleBuzz();
   void startAlarm();
   void stopAlarm();
 
 private:
   static void _buzz(void *parameter);
   static void _doubleBuzz(void *parameter);
+  static void _tripleBuzz(void *parameter);
   static void _alarm(void *parameter);
 
   uint8_t pin;

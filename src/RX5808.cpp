@@ -29,7 +29,14 @@ RX5808::RX5808(uint8_t data, uint8_t le, uint8_t clk, uint8_t rssi, Settings *s)
 void RX5808::startScan() {
   // Start scanning task only if not already running
   if (scanHandle == NULL) {
+#if defined(CONFIG_SINGLE_CORE) && CONFIG_SINGLE_CORE == 0
+    // Dual-core (S3 integrated): pin the scan to core 1 (same as the timing
+    // task, which is paused while scanning) so its work never competes with
+    // the UI loop on core 0. Single-core builds (C3) have no core 1.
+    xTaskCreatePinnedToCore(_scan, "scan", SCAN_STACK_SIZE, this, 1, &scanHandle, 1);
+#else
     xTaskCreate(_scan, "scan", SCAN_STACK_SIZE, this, 1, &scanHandle);
+#endif
   }
 }
 
