@@ -90,15 +90,7 @@ void Menu::handleButtons() {
   }
 
   // Update length of scan menu
-#ifdef INTEGRATED
-  // The SCAN page is the scanner bar graph in scanner mode, but the live
-  // status page (no selectable items) while a background mode owns the RX5808
-  menus[SCAN].menuItemsLength = (integrated->mode() == IntMode::SCANNER)
-      ? (SCAN_FREQUENCY_RANGE / settings->scanInterval.get()) + 1  // +1 for final number inclusion
-      : 1;
-#else
   menus[SCAN].menuItemsLength = (SCAN_FREQUENCY_RANGE / settings->scanInterval.get()) + 1;  // +1 for final number inclusion
-#endif
 
   // Move between menu items
   if (nextPressed == HIGH || prevPressed == HIGH) {
@@ -120,12 +112,32 @@ void Menu::handleButtons() {
       // Sound buzzer on button press if necessary
       if (settings->buzzer.get()) buzzer->buzz();
     } else if (!selectButtonHeld && millis() - selectButtonPressTime > LONG_PRESS_DURATION) {  // Held longer than threshold register long press
+#ifdef INTEGRATED
+      // Long-press = go back one level toward MAIN. The scanner and WiFi
+      // timer pages are temporary overrides of the always-on node, so leaving
+      // them must hand the RF hardware back to the node.
+      switch (menuIndex) {
+        case MAIN: menuIndex = ADVANCED; break;                             // If on main menu, go to advanced
+        case SCAN_INTERVAL ... BATTERY_ALARM: menuIndex = SETTINGS; break;  // If on individual settings menu, go to settings
+        case SCAN:
+          integrated->exitScan();
+          menuIndex = MAIN;
+          break;
+        case WIFI:
+          integrated->exitTimer();
+          menuIndex = MAIN;
+          break;
+        case CALIBRATION: menuIndex = ADVANCED; break;                      // If on calibration, go to advanced
+        default: menuIndex = MAIN; break;                                   // Otherwise, go back to main menu
+      }
+#else
       switch (menuIndex) {
         case MAIN: menuIndex = ADVANCED; break;                             // If on main menu, go to advanced
         case SCAN_INTERVAL ... BATTERY_ALARM: menuIndex = SETTINGS; break;  // If on individual settings menu, go to settings
         case WIFI ... CALIBRATION: menuIndex = ADVANCED; break;             // If on individual advanced menu, go to advanced
         default: menuIndex = MAIN; break;                                   // Otherwise, go back to main menu
       }
+#endif
 
       selectButtonHeld = true;
 
@@ -144,18 +156,28 @@ void Menu::handleButtons() {
   if (selectButtonPressTime > 0 && !selectButtonHeld) {
 #ifdef INTEGRATED
     switch (menuIndex) {
-      case MAIN:  // Mode rows: SCAN opens the scanner/status page; the other
-        // two enter the background mode (or toggle it back to scanner)
+      case MAIN:
         switch (menus[MAIN].menuIndex) {
-          case 0: menuIndex = SCAN; break;                      // Scanner page
-          case 1: integrated->selectMode(IntMode::NODE); break;   // Stay on MAIN
-          case 2: integrated->selectMode(IntMode::TIMER); break;  // Stay on MAIN
+          case 0:  // Scanner page: pause the node (scan task starts next frame)
+            integrated->enterScan();
+            menuIndex = SCAN;
+            break;
+          case 1:  // WiFi Timer page: normally instant (AP pre-initialized at
+            // boot); the splash only matters on the boot-failure fallback
+            // where the slow bring-up runs while it is on screen
+            menuIndex = WIFI;
+            drawStartingSplash();
+            if (!integrated->enterTimer()) {
+              menuIndex = MAIN;  // AP failed to start
+            }
+            break;
+          case 2: menuIndex = ABOUT; break;  // Go to about menu
         }
         break;
-      case SCAN:  // Band toggle in scanner mode; the status page has no selection
-        if (integrated->mode() == IntMode::SCANNER) {
-          module->lowband.set(!module->lowband.get());
-        }
+      case SCAN:  // Band toggle on the scanner page
+        module->lowband.set(!module->lowband.get());
+        break;
+      case WIFI:  // Timer status page: no selectable items
         break;
       case SETTINGS:  // Handle SELECT on settings menu
         switch (menus[SETTINGS].menuIndex) {
@@ -168,8 +190,6 @@ void Menu::handleButtons() {
         switch (menus[ADVANCED].menuIndex) {
           case 0: menuIndex = SETTINGS; break;     // Go to settings menu
           case 1: menuIndex = CALIBRATION; break;  // Go to calibration menu
-          case 2: bootStarForge(); break;          // Boot the StarForgeOS slot
-          case 3: menuIndex = ABOUT; break;        // Go to about menu
         }
         break;
       case SCAN_INTERVAL ... BATTERY_ALARM:  // Handle SELECT on individual settings options
@@ -280,14 +300,13 @@ void Menu::drawMenu() {
   // Call appropriate draw function
 #ifdef INTEGRATED
   switch (menuIndex) {
-    case SCAN:  // Scanner bar graph, or the live status page (NODE/TIMER)
-      if (integrated->mode() == IntMode::SCANNER) {
-        module->startScan();
-        drawScanMenu();
-      } else {
-        module->stopScan();
-        drawStatusMenu();
-      }
+    case SCAN:  // Scanner bar graph (node paused for the duration)
+      module->startScan();
+      drawScanMenu();
+      break;
+    case WIFI:  // WiFi timer status page
+      module->stopScan();
+      drawTimerMenu();
       break;
     case ABOUT:  // Draw about menu
       drawAboutMenu();
@@ -363,19 +382,6 @@ void Menu::drawSelectionMenu() {
       u8g2.drawStr(30, 28 + (i * 16), menus[menuIndex].menuItems[i].name);
     }
   }
-
-#ifdef INTEGRATED
-  // Mark the active background mode on the main menu
-  if (menuIndex == MAIN) {
-    int activeRow = (integrated->mode() == IntMode::NODE) ? 1 :
-                    (integrated->mode() == IntMode::TIMER) ? 2 : -1;
-    if (activeRow >= 0) {
-      u8g2.setFont(u8g2_font_5x7_tf);
-      u8g2.drawStr(104, 28 + (activeRow * 16), "ON");
-      u8g2.setFont(u8g2_font_7x13_tf);
-    }
-  }
-#endif
 
   // Draw extra text for calibration menu
   if (menuIndex == CALIBRATION) {
@@ -507,37 +513,34 @@ void Menu::drawAboutMenu() {
 }
 
 #ifdef INTEGRATED
-// Live status page shown on the SCAN page while a background mode (NODE or
-// TIMER) owns the RX5808: current channel, live RSSI, lap count, and the AP
-// IP in timer mode. The scanner bar graph is only available in scanner mode.
-void Menu::drawStatusMenu() {
-  bool node = (integrated->mode() == IntMode::NODE);
-  const char *title = node ? "USB Node" : "WiFi Timer";
-  u8g2.setFont(u8g2_font_7x13B_tf);
-  u8g2.drawStr(xTextCentre(title, 7), 12, title);
-
+// WiFi timer status page: the AP IP, the tuned channel, live RSSI and the
+// lap count while the web timer is running. The generic page title
+// ("WiFi Timer") is drawn by drawMenu() above these rows.
+void Menu::drawTimerMenu() {
   char line[24];
   u8g2.setFont(u8g2_font_7x13_tf);
-  if (node) {
-    snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
-    u8g2.drawStr(10, 28, line);
-    snprintf(line, sizeof(line), "RSSI %d", integrated->rssi());
-    u8g2.drawStr(10, 42, line);
-    u8g2.setFont(u8g2_font_5x7_tf);
-    snprintf(line, sizeof(line), "Laps %d  Last %d.%ds",
-             integrated->lapCount(), integrated->lastLapTimeMs() / 1000,
-             (integrated->lastLapTimeMs() % 1000) / 100);
-    u8g2.drawStr(10, 58, line);
-  } else {
-    snprintf(line, sizeof(line), "IP %s", integrated->apIP().c_str());
-    u8g2.drawStr(10, 28, line);
-    snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
-    u8g2.drawStr(10, 42, line);
-    u8g2.setFont(u8g2_font_5x7_tf);
-    snprintf(line, sizeof(line), "RSSI %d  Laps %d",
-             integrated->rssi(), integrated->lapCount());
-    u8g2.drawStr(10, 58, line);
-  }
+  snprintf(line, sizeof(line), "IP %s", integrated->apIP().c_str());
+  u8g2.drawStr(10, 28, line);
+  snprintf(line, sizeof(line), "Freq %dMHz", integrated->frequencyMhz());
+  u8g2.drawStr(10, 42, line);
+  u8g2.setFont(u8g2_font_5x7_tf);
+  snprintf(line, sizeof(line), "RSSI %d  Laps %d",
+           integrated->rssi(), integrated->lapCount());
+  u8g2.drawStr(10, 56, line);
+}
+
+// Shown immediately when the user selects "WiFi Timer", before the
+// multi-second blocking AP bring-up runs, so the screen responds at once
+// instead of looking frozen on the main menu.
+void Menu::drawStartingSplash() {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_7x13B_tf);
+  const char *t1 = "WiFi Timer";
+  u8g2.drawStr(xTextCentre(t1, 7), 28, t1);
+  u8g2.setFont(u8g2_font_7x13_tf);
+  const char *t2 = "Starting...";
+  u8g2.drawStr(xTextCentre(t2, 7), 44, t2);
+  u8g2.sendBuffer();
 }
 
 // RX5808::calibrate() bit-bangs the same pins the 1ms timing task drives in
@@ -590,11 +593,14 @@ void Menu::updateSettingsOptionIcons(menuStruct *menu, int selectedIndex) {
 // Initialise menu structures
 void Menu::initMenus() {
 #ifdef INTEGRATED
-  // Main menu (integrated): SCAN opens the scanner/status page; the other
-  // rows enter (or toggle off) the background modes
+  // NOTE: the display fits at most THREE rows per selection page (16px rows
+  // starting at y=16, below the title and above the battery voltage). Do not
+  // add more items to any menu — extra rows render off-screen.
+  // Main menu: the RotorHazard USB node is ALWAYS ON (it is not a menu item);
+  // these rows open the pages that temporarily override it.
   mainMenuItems[0] = { "Scan", bitmap_Scan };
-  mainMenuItems[1] = { "USB Node", bitmap_Star };
-  mainMenuItems[2] = { "WiFi Timer", bitmap_Wifi };
+  mainMenuItems[1] = { "WiFi Timer", bitmap_Wifi };
+  mainMenuItems[2] = { "About", bitmap_About };
 #else
   // Main menu
   mainMenuItems[0] = { "Scan", bitmap_Scan };
@@ -622,11 +628,10 @@ void Menu::initMenus() {
   batteryAlarmMenuItems[2] = { "3.0v", bitmap_Blank };
 
 #ifdef INTEGRATED
-  // Advanced menu (integrated)
+  // Advanced menu (integrated): 2 rows (the 3-row display limit is enforced
+  // in the comment above)
   advancedMenuItems[0] = { "Settings", bitmap_Settings };
   advancedMenuItems[1] = { "Calibration", bitmap_Calibration };
-  advancedMenuItems[2] = { "Boot StarForge", bitmap_Star };
-  advancedMenuItems[3] = { "About", bitmap_About };
 #else
   // Advanced menu
   advancedMenuItems[0] = { "Wi-Fi", bitmap_Wifi };
@@ -644,14 +649,18 @@ void Menu::initMenus() {
   menus[2] = { "Settings", settingsMenuItems, 3, 0 };
   menus[3] = { "About", nullptr, 1, 0 };
 #ifdef INTEGRATED
-  menus[4] = { "Advanced", advancedMenuItems, 4, 0 };
+  menus[4] = { "Advanced", advancedMenuItems, 2, 0 };
 #else
   menus[4] = { "Advanced", advancedMenuItems, 3, 0 };
 #endif
   menus[5] = { "Scan interval", scanIntervalMenuItems, 3, 0 };
   menus[6] = { "Buzzer", buzzerMenuItems, 2, 0 };
   menus[7] = { "Bat. alarm", batteryAlarmMenuItems, 3, 0 };
+#ifdef INTEGRATED
+  menus[8] = { "WiFi Timer", nullptr, 1, 0 };
+#else
   menus[8] = { "Wi-Fi", nullptr, 1, 0 };
+#endif
   menus[9] = { "Calibration", calibrationMenuItems, 2, 0 };
 }
 

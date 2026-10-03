@@ -13,15 +13,18 @@
 #include "settings/wifi_manager.h"
 #include "web/web_server.h"
 
-// Background operating modes of the integrated firmware.
-// Exactly one "owner" drives the RX5808 at any time:
-//   SCANNER -> the NC scan task (frequency sweep, bar-graph page)
-//   NODE    -> TimingCore (RotorHazard USB node, fixed VTX channel)
-//   TIMER   -> TimingCore (WiFi web timer, fixed VTX channel)
+// Effective state of the integrated firmware. The RotorHazard USB node is the
+// always-on baseline: it runs continuously from boot. The two menu pages that
+// need exclusive ownership of the RF hardware temporarily override it:
+//   SCANNING -> the NC scan task sweeps the RX5808; node timing is paused and
+//               the serial protocol is drained (a WRITE_FREQUENCY arriving
+//               mid-sweep would steer the scanner).
+//   TIMER    -> the WiFi web timer owns the timing engine; the node protocol
+//               is off and serial is drained.
 enum class IntMode {
-  SCANNER,
-  NODE,
-  TIMER,
+  NODE,      // baseline, always-on RotorHazard USB node
+  SCANNING,  // temporary: scanner page is up
+  TIMER,     // temporary: WiFi timer page is up
 };
 
 // Orchestration layer between the NC shell (menu, buttons, battery, buzzer)
@@ -30,25 +33,33 @@ class IntegratedMode {
 public:
   IntegratedMode(Settings *settings, RX5808 *rx);
 
-  // Start the firmware in scanner mode (call once from setup()).
+  // Start the firmware with the node baseline running (call once from setup()).
   void begin();
 
-  // Per-loop work: node serial protocol / timing bookkeeping.
+  // Per-loop work: node protocol / timing bookkeeping / serial draining.
   void process();
 
   IntMode mode() const { return _mode; }
 
-  // SELECT on a MAIN-menu mode row: enter the mode if it is not the active
-  // one, exit to scanner mode if it already is (toggle semantics).
-  void selectMode(IntMode m);
+  // Scanner page transitions. The menu owns the scan task itself
+  // (module->startScan()/stopScan()); these manage the node pause/resume.
+  void enterScan();
+  void exitScan();
 
-  // Calibration guard: while NODE/TIMER is active the 1ms timing task bit-bangs
-  // the same RX5808 pins that RX5808::calibrate() uses, so pause it around the
-  // call and re-tune afterwards (calibrate() leaves the hardware at 5800 MHz).
+  // WiFi timer page transitions. enterTimer() is instant when the AP was
+  // pre-initialized at boot; only the boot-failure fallback blocks for the
+  // full (slow) bring-up. Returns false if the AP failed to start.
+  bool enterTimer();
+  void exitTimer();
+
+  // Calibration guard: while the timing engine is active its 1ms task
+  // bit-bangs the same RX5808 pins that RX5808::calibrate() uses, so pause it
+  // around the call and re-tune afterwards (calibrate() leaves the hardware
+  // at 5800 MHz).
   bool pauseForCalibration();
   void resumeAfterCalibration(bool wasActive);
 
-  // Status-page data (shown on the SCAN page while NODE/TIMER is active)
+  // Status-page data
   uint16_t frequencyMhz() const { return _timing.getCurrentFrequency(); }
   uint8_t rssi() const { return _timing.getCurrentRSSI(); }
   uint16_t lapCount() const { return _timing.getLapCount(); }
@@ -60,13 +71,11 @@ public:
   void addLap(const LapData &lap);
 
 private:
-  void ensureTiming();
-  void enterNode();
-  void enterTimer();
-  void exitToScanner();
-  void shutdownWifi();
+  // (Re)start the always-on node baseline. Idempotent.
+  void startNode();
+  void drainSerial();
 
-  Settings *_settings;  // NC settings (scan interval etc., scanner mode)
+  Settings *_settings;  // NC settings (scan interval etc., scanner page)
   RX5808 *_rx;          // NC RX5808 (scan task, calibration, RF tuning)
 
   TimingCore _timing;
@@ -75,8 +84,9 @@ private:
   WiFiManager _wifi;
   WebServerManager _web;
 
-  IntMode _mode = IntMode::SCANNER;
+  IntMode _mode = IntMode::NODE;
   bool _timingBegun = false;
+  bool _webBegun = false;
 
   // Race state shared with the web server (web start/stop-race semantics).
   // In NODE mode laps are consumed directly by the node protocol; in TIMER

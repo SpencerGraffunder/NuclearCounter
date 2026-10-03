@@ -931,8 +931,15 @@ body.race-stopped .control-panel {
 }
 
 /* ===== Update section ===== */
+/* The update content is taller than the generic 500px cap, so it gets its
+   own expanded max-height. The collapsed rule must match the id specificity
+   or it loses to #updateContent and the section can never collapse. */
 #updateContent {
     max-height: 1600px;
+}
+
+#updateContent.collapsed {
+    max-height: 0;
 }
 
 .update-subhead {

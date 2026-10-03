@@ -106,7 +106,8 @@ private:
 
 #ifdef INTEGRATED
   IntegratedMode *integrated;
-  void drawStatusMenu();
+  void drawTimerMenu();
+  void drawStartingSplash();
   void calibrateWithTiming(bool high);
 #endif
 

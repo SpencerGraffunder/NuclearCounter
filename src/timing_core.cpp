@@ -624,7 +624,17 @@ void TimingCore::setRX5808Frequency(uint16_t freq_mhz) {
 // Public interface methods (thread-safe for ESP32-C3)
 void TimingCore::setFrequency(uint16_t freq_mhz) {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
-    setRX5808Frequency(freq_mhz);
+    if (state.activated) {
+      setRX5808Frequency(freq_mhz);
+    } else {
+      // Engine paused (e.g. the scanner page owns the RF pins): only track
+      // the requested frequency. The hardware re-tune is deferred until the
+      // engine is re-activated (exitScan()/enterTimer() force it), so a web
+      // client changing the channel mid-scan can't fight the scan task over
+      // the bit-bang pins.
+      state.frequency_mhz = freq_mhz;
+      recent_freq_change = true;
+    }
     xSemaphoreGive(timing_mutex);
   }
 }

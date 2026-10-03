@@ -49,7 +49,8 @@ void setup() {
   settings.loadSettingsStorage();
 
 #ifdef INTEGRATED
-  // Start in scanner mode; the menu rows enter the USB node / WiFi timer modes
+  // Start the always-on RotorHazard USB node baseline; the Scan and WiFi
+  // Timer pages temporarily override it while they are open
   integrated.begin();
 #endif
 
