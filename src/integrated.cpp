@@ -23,8 +23,8 @@ static void onTimingLap(const LapData &lap) {
   }
 }
 
-IntegratedMode::IntegratedMode(Settings *settings, RX5808 *rx)
-  : _settings(settings), _rx(rx) {
+IntegratedMode::IntegratedMode(Settings *settings, RX5808 *rx, Buzzer *buzzer)
+  : _settings(settings), _rx(rx), _buzzer(buzzer) {
   s_self = this;
 }
 
@@ -50,6 +50,7 @@ void IntegratedMode::begin() {
 }
 
 void IntegratedMode::process() {
+  tickRace();  // countdown / go-flash / lap-flash / status line (runs in all modes)
   if (_mode == IntMode::NODE) {
     _node.process();  // includes handleSerialInput()
   } else {
@@ -208,12 +209,102 @@ uint32_t IntegratedMode::best3ConsecutiveMs() const {
 }
 
 void IntegratedMode::addLap(const LapData &lap) {
-  if (_mode != IntMode::TIMER || !_raceActive) {
-    return;
+  if (!_raceActive) {
+    return;  // only record laps for the active session (matches the web UI)
   }
   _laps.push_back(lap);
   while (_laps.size() > 100) {
     _laps.erase(_laps.begin());
+  }
+  // Lap-crossing feedback: beep + a transient status flash. Works in any menu
+  // mode (the pilot hears it), not just while the timer page is up.
+  if (_buzzer) {
+    _buzzer->buzz();
+  }
+  snprintf(_statusFlash, sizeof(_statusFlash), "Lap %d", (int)_laps.size());
+  _statusFlashUntilMs = millis() + RACE_LAP_FLASH_MS;
+}
+
+// SELECT on the WiFi timer page: idle -> start (countdown), countdown ->
+// cancel, running -> stop. The web can start/stop the same session in parallel
+// (it sets _raceActive/_raceStartTime directly); tickRace() reconciles the two.
+void IntegratedMode::oledSelectTimer() {
+  if (_raceActive) {
+    _raceActive = false;  // stop the session; keep _laps so the stats persist
+    Serial.println(F("OLED: race stopped"));
+  } else if (_countdownActive) {
+    _countdownActive = false;  // cancel the running countdown
+    Serial.println(F("OLED: countdown cancelled"));
+  } else {
+    _countdownActive = true;
+    _countdownStartMs = millis();
+    _countdownLastBeepSecond = 0;  // force a beep on the first second
+    Serial.println(F("OLED: race start (countdown)"));
+  }
+}
+
+uint32_t IntegratedMode::sessionElapsedMs() const {
+  if (!_raceActive) {
+    return 0;
+  }
+  // Unsigned subtraction wraps correctly across millis() rollover (~49 days).
+  return millis() - _raceStartTime;
+}
+
+// Advance the race session state machine and refresh the status line. Called
+// from process() every loop, so it runs regardless of which menu page is up.
+void IntegratedMode::tickRace() {
+  uint32_t now = millis();
+
+  // A race just started (from the web, or the countdown completing below):
+  // flash "Go!" and beep once. This is the single Go-beep source for both.
+  if (_raceActive && !_prevRaceActive) {
+    _goFlashUntilMs = now + RACE_GO_FLASH_MS;
+    if (_buzzer) {
+      _buzzer->buzz();
+    }
+  }
+  _prevRaceActive = _raceActive;
+
+  // Countdown progression: one beep per displayed second, then arm the race.
+  if (_countdownActive) {
+    uint32_t elapsed = now - _countdownStartMs;
+    int remaining = RACE_COUNTDOWN_SECONDS - (int)(elapsed / 1000);  // 5,4,3,2,1
+    int sec = (remaining > 0) ? remaining : 1;
+    if (sec != _countdownLastBeepSecond) {
+      _countdownLastBeepSecond = sec;
+      if (_buzzer) {
+        _buzzer->buzz();
+      }
+    }
+    if (elapsed >= (uint32_t)RACE_COUNTDOWN_SECONDS * 1000) {
+      // Countdown done: arm the race exactly as the web's start does.
+      _countdownActive = false;
+      _raceActive = true;
+      _raceStartTime = now;
+      _laps.clear();
+      _goFlashUntilMs = now + RACE_GO_FLASH_MS;  // show "Go!" immediately
+    }
+  }
+
+  // Base status line.
+  if (_countdownActive) {
+    int remaining = RACE_COUNTDOWN_SECONDS - (int)((now - _countdownStartMs) / 1000);
+    if (remaining < 1) {
+      remaining = 1;
+    }
+    snprintf(_statusBuf, sizeof(_statusBuf), "Start in %d", remaining);
+  } else if (_raceActive) {
+    snprintf(_statusBuf, sizeof(_statusBuf),
+             (now < _goFlashUntilMs) ? "Go!" : "Racing");
+  } else {
+    snprintf(_statusBuf, sizeof(_statusBuf), "Ready");
+  }
+
+  // A transient lap flash (set in addLap) overrides the base status.
+  if (now < _statusFlashUntilMs) {
+    strncpy(_statusBuf, _statusFlash, sizeof(_statusBuf) - 1);
+    _statusBuf[sizeof(_statusBuf) - 1] = '\0';
   }
 }
 

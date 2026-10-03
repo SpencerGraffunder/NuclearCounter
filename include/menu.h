@@ -107,7 +107,6 @@ private:
 #ifdef INTEGRATED
   IntegratedMode *integrated;
   void drawTimerMenu();
-  void drawTimerLapRow(const char *label, uint32_t ms, int y);
   void drawStartingSplash();
   void calibrateWithTiming(bool high);
 #endif

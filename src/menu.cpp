@@ -177,7 +177,8 @@ void Menu::handleButtons() {
       case SCAN:  // Band toggle on the scanner page
         module->lowband.set(!module->lowband.get());
         break;
-      case WIFI:  // Timer status page: no selectable items
+      case WIFI:  // Timer page: Enter toggles the race session (start/stop)
+        integrated->oledSelectTimer();
         break;
       case SETTINGS:  // Handle SELECT on settings menu
         switch (menus[SETTINGS].menuIndex) {
@@ -519,31 +520,82 @@ void Menu::drawAboutMenu() {
 }
 
 #ifdef INTEGRATED
-// WiFi timer page: small header (title top-left, AP IP top-right) over the
-// lap stats — last lap, best 3 consecutive, best lap — in the small 5x7 font.
-void Menu::drawTimerMenu() {
-  u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(1, 10, "WiFi Timer");
-  const char *ip = integrated->apIP().c_str();
-  u8g2.drawStr(128 - u8g2.getStrWidth(ip) - 1, 10, ip);
+// ---- WiFi timer page (OLED race-session control) ----
+// SH1306 panels need safe margins: a ~2px left glass offset and a 6px right
+// guard (image cols 122-127 are never driven). These anchors keep every glyph
+// well inside the safe area:
+//   LX  left margin        MID  left-column value right edge
+//   RCX right-col label    RX   right-column value right edge
+static const int TP_LX = 4, TP_MID = 58, TP_RCX = 60, TP_RX = 120;
 
-  drawTimerLapRow("Last", integrated->lastLapMs(), 26);
-  drawTimerLapRow("Best 3", integrated->best3ConsecutiveMs(), 38);
-  drawTimerLapRow("Best", integrated->bestLapMs(), 50);
+// 1-decimal lap value ("12.3s") — 5 chars, so it fits beside the "Best 3"
+// label. (2 decimals would collide with the label in the right column.)
+static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
+  if (ms == 0) {
+    snprintf(buf, n, "--.-");
+  } else {
+    snprintf(buf, n, "%lu.%lus", (unsigned long)(ms / 1000),
+             (unsigned long)((ms % 1000) / 100));
+  }
 }
 
-// One timer-page stat row: label left, time value right-aligned. A 0 value
-// means "no data yet" and renders as a dash placeholder.
-void Menu::drawTimerLapRow(const char *label, uint32_t ms, int y) {
-  char value[12];
+// Session clock as M:SS (minutes may exceed 60, so a long session never
+// overflows the field). No auto-stop, so this keeps counting indefinitely.
+static void tpFmtSessionMs(uint32_t ms, char *buf, size_t n) {
   if (ms == 0) {
-    snprintf(value, sizeof(value), "--.-");
-  } else {
-    snprintf(value, sizeof(value), "%lu.%02lus", ms / 1000, (ms % 1000) / 10);
+    snprintf(buf, n, "--:--");
+    return;
   }
+  uint32_t total_s = ms / 1000;
+  snprintf(buf, n, "%lu:%02lu", (unsigned long)(total_s / 60),
+           (unsigned long)(total_s % 60));
+}
+
+// Layout (5 rows, small 5x7 font, ~11px apart, bottom band left free):
+//   WiFi Timer          192.168.8.1
+//   Last   --.--        Best   --.--
+//   Laps   ---          Best 3 --.--
+//   Time   --:--        Enter=Start
+//   <status text line>
+void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(2, y, label);
-  u8g2.drawStr(128 - u8g2.getStrWidth(value) - 2, y, value);
+  char v[12];
+
+  // Header: title left, AP IP right
+  u8g2.drawStr(TP_LX, 2, "WiFi Timer");
+  const char *ip = integrated->apIP().c_str();
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ip), 2, ip);
+
+  // Last | Best
+  u8g2.drawStr(TP_LX, 13, "Last");
+  tpFmtLapMs(integrated->lastLapMs(), v, sizeof(v));
+  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 13, v);
+  u8g2.drawStr(TP_RCX, 13, "Best");
+  tpFmtLapMs(integrated->bestLapMs(), v, sizeof(v));
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 13, v);
+
+  // Laps | Best 3
+  u8g2.drawStr(TP_LX, 24, "Laps");
+  int laps = integrated->sessionLapCount();
+  if (laps <= 0) {
+    snprintf(v, sizeof(v), "---");
+  } else {
+    snprintf(v, sizeof(v), "%d", laps);
+  }
+  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 24, v);
+  u8g2.drawStr(TP_RCX, 24, "Best 3");
+  tpFmtLapMs(integrated->best3ConsecutiveMs(), v, sizeof(v));
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), 24, v);
+
+  // Time | Enter=Start/Stop
+  u8g2.drawStr(TP_LX, 35, "Time");
+  tpFmtSessionMs(integrated->sessionElapsedMs(), v, sizeof(v));
+  u8g2.drawStr(TP_MID - u8g2.getStrWidth(v), 35, v);
+  const char *ent = integrated->raceActive() ? "Enter=Stop" : "Enter=Start";
+  u8g2.drawStr(TP_RX - u8g2.getStrWidth(ent), 35, ent);
+
+  // Status line (countdown / Go! / Racing / Ready / lap flash)
+  u8g2.drawStr(TP_LX, 46, integrated->statusText());
 }
 
 // Shown immediately when the user selects "WiFi Timer", before the

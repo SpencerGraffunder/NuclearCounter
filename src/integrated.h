@@ -7,6 +7,7 @@
 #include <vector>
 #include "settings.h"
 #include "RX5808.h"
+#include "buzzer.h"
 #include "timing_core.h"
 #include "node_mode.h"
 #include "settings/settings_manager.h"
@@ -29,9 +30,16 @@ enum class IntMode {
 
 // Orchestration layer between the NC shell (menu, buttons, battery, buzzer)
 // and the SFOS-ported modules (TimingCore, NodeMode, web stack).
+// Race session lifecycle (driven by the OLED timer page, synced with the web
+// which sets _raceActive/_raceStartTime directly). The countdown is an OLED
+// pre-start sequence: pressing Start runs 5..1 then actually arms the race.
+static const int RACE_COUNTDOWN_SECONDS = 5;
+static const uint32_t RACE_GO_FLASH_MS = 1200;
+static const uint32_t RACE_LAP_FLASH_MS = 2000;
+
 class IntegratedMode {
 public:
-  IntegratedMode(Settings *settings, RX5808 *rx);
+  IntegratedMode(Settings *settings, RX5808 *rx, Buzzer *buzzer);
 
   // Start the firmware with the node baseline running (call once from setup()).
   void begin();
@@ -62,13 +70,29 @@ public:
   // Status-page data
   uint16_t frequencyMhz() const { return _timing.getCurrentFrequency(); }
   uint8_t rssi() const { return _timing.getCurrentRSSI(); }
-  uint16_t lapCount() const { return _timing.getLapCount(); }
   // Lap stats for the timer page, from the web-shared lap history. Return 0
   // for "no data yet" (the page renders that as a dash).
   uint32_t lastLapMs() const;
   uint32_t bestLapMs() const;
   uint32_t best3ConsecutiveMs() const;
   String apIP() const { return WiFi.softAPIP().toString(); }
+
+  // Race session control + state for the OLED timer page.
+  // SELECT on the timer page toggles this: idle->countdown->racing, running->stop.
+  void oledSelectTimer();
+  // Advance the countdown / go-flash / lap-flash timers and refresh the status
+  // string. Called from process() every loop.
+  void tickRace();
+  bool raceActive() const { return _raceActive; }
+  bool countdownActive() const { return _countdownActive; }
+  // Total elapsed time of the current session (0 when idle). No auto-stop:
+  // a session runs until explicitly stopped.
+  uint32_t sessionElapsedMs() const;
+  // Lap count for the current session (matches the web UI's lap list).
+  int sessionLapCount() const { return (int)_laps.size(); }
+  // Human-readable status line for the timer page ("Start in 3", "Go!",
+  // "Racing", "Ready", or a transient lap flash).
+  const char *statusText() const { return _statusBuf; }
 
   // Called from the static timing lap callback (onTimingLap). Public because
   // that callback is a plain C function pointer, not a member/friend.
@@ -81,6 +105,7 @@ private:
 
   Settings *_settings;  // NC settings (scan interval etc., scanner page)
   RX5808 *_rx;          // NC RX5808 (scan task, calibration, RF tuning)
+  Buzzer *_buzzer;      // countdown / go / lap beeps
 
   TimingCore _timing;
   NodeMode _node;
@@ -98,6 +123,16 @@ private:
   std::vector<LapData> _laps;
   bool _raceActive = false;
   uint32_t _raceStartTime = 0;
+
+  // Race session state machine (see tickRace / oledSelectTimer)
+  bool _countdownActive = false;
+  uint32_t _countdownStartMs = 0;
+  int _countdownLastBeepSecond = 0;  // last countdown second that was beeps
+  uint32_t _goFlashUntilMs = 0;
+  bool _prevRaceActive = false;
+  char _statusFlash[16];             // transient message (e.g. "Lap 3")
+  uint32_t _statusFlashUntilMs = 0;
+  mutable char _statusBuf[16];       // last computed status line
 };
 
 #endif  // INTEGRATED

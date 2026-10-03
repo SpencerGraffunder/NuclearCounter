@@ -30,7 +30,7 @@ Api api(&settings, &module, &battery);
 
 #ifdef INTEGRATED
 // Integrated mode orchestrator (SFOS-ported timing / USB node / web stack)
-IntegratedMode integrated(&settings, &module);
+IntegratedMode integrated(&settings, &module, &buzzer);
 #endif
 
 // Create menu object
