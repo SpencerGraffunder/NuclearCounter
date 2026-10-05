@@ -202,6 +202,29 @@ public:
   void clearRSSIHistory();
 #endif
 
+  // Bench-only sample-interval statistics (build with -DTIMING_JITTER_PROBE,
+  // see [env:JITTER_C3]). Exposed over HTTP rather than serial because opening
+  // this board's USB serial port resets it (rst:0x15 USB_UART_CHIP_RESET), which
+  // would tear the AP down in the middle of a measurement.
+#ifdef TIMING_JITTER_PROBE
+  struct JitterStats {
+    uint32_t samples;     // samples in the window
+    uint32_t sum_us;      // sum of the sample intervals
+    uint32_t max_us;      // worst (longest) interval in the window
+    uint32_t buckets[9];  // <1k 1-1.5k 1.5-2k 2-3k 3-5k 5-10k 10-20k 20-50k >50k
+    uint32_t window_ms;   // how long the window was
+    uint32_t wait_max_us; // worst time blocked waiting for timing_mutex
+    uint32_t wait_sum_us; // total time blocked waiting for timing_mutex
+    uint32_t work_max_us; // worst time spent holding timing_mutex (one sample)
+    uint32_t max_at_ms;   // uptime when the worst interval happened
+    uint32_t outside_max_us; // worst time between finishing one sample and starting the next
+    uint32_t deact_iters; // iterations skipped because the engine was deactivated
+  };
+  // Returns the accumulated window and starts a new one, so a caller polling
+  // this endpoint measures exactly the interval between its two reads.
+  bool readJitterStats(JitterStats& out);
+#endif
+
   // Callbacks for mode-specific handling
   typedef void (*LapCallback)(const LapData& lap);
   typedef void (*CrossingCallback)(bool crossing_state, uint8_t rssi);
@@ -212,6 +235,25 @@ public:
 private:
   LapCallback lap_callback = nullptr;
   CrossingCallback crossing_callback = nullptr;
+
+#ifdef TIMING_JITTER_PROBE
+  // Written only by the timing task; read/reset under timing_mutex.
+  uint32_t jit_n = 0;
+  uint32_t jit_sum_us = 0;
+  uint32_t jit_max_us = 0;
+  uint32_t jit_buckets[9] = {0};
+  uint32_t jit_wait_sum_us = 0;
+  uint32_t jit_wait_max_us = 0;
+  uint32_t jit_work_sum_us = 0;
+  uint32_t jit_work_max_us = 0;
+  uint32_t jit_max_at_ms = 0;
+  uint32_t jit_last_give_us = 0;
+  uint32_t jit_outside_max_us = 0;
+  uint32_t jit_deact_iters = 0;
+  uint32_t jit_last_sample_us = 0;
+  uint32_t jit_window_start_ms = 0;
+  uint32_t jit_last_read_ms = 0;
+#endif
 };
 
 #endif // TIMING_CORE_H

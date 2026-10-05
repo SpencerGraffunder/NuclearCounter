@@ -152,10 +152,16 @@ class RaceTimer {
     }
     
     startPolling() {
-        // Poll for updates every 250ms
+        // Poll every 400 ms (was 250 ms). Measured on the single-core C3 with
+        // the JITTER_C3 bench build: the RSSI task holds ~1000 samples/s with
+        // the AP idle, but every HTTP request competes for that same core —
+        // 4 Hz polling costs ~12% of the sample rate (880 vs 996 samples/s over
+        // repeated 60 s windows), 10 Hz ~20%, 25 Hz ~62%, 50 Hz from three
+        // clients ~18%. Laps arrive seconds apart, so 400 ms keeps the UI
+        // responsive for ~40% less radio load than the old 250 ms.
         this.pollInterval = setInterval(() => {
             this.updateData();
-        }, 250);
+        }, 400);
         console.log('Polling started');
     }
     

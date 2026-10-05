@@ -94,6 +94,15 @@ void setup() {
   // Start the always-on RotorHazard USB node baseline; the Scan and WiFi
   // Timer pages temporarily override it while they are open
   integrated.begin();
+
+#ifdef DEBUG_BOOT_TIMER
+  // BENCH-ONLY: never defined by any production env in platformio.ini.
+  // Boots straight into the WiFi timer page so the AP/web stack is reachable
+  // over USB serial without someone pressing SELECT on the bench.
+  Serial.println("[BENCH] auto-entering timer page");
+  bool benchTimer = integrated.enterTimer();
+  Serial.printf("[BENCH] enterTimer -> %d\n", benchTimer ? 1 : 0);
+#endif
 #endif
 
   // Setup menu

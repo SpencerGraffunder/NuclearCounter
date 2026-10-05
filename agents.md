@@ -47,3 +47,30 @@ and point at the code.
 - Consequence: never put a periodic `Serial.print` in `loop()` in a shipping build.
   The loop heartbeat / button trace is now opt-in via `-D C3_DEBUG_HEARTBEAT=1`
   (see `include/menu.h`), not defined by default.
+
+## WiFi timer page gotchas (INTEGRATED build)
+
+- **WiFi is on only while the timer page is open.** `enterTimer()` brings the AP up
+  and `exitTimer()` tears it down (`_web.stop()`, then `softAPdisconnect(true)`, then
+  `WiFi.mode(WIFI_OFF)`). The full `WIFI_OFF` teardown is mandatory: a partial teardown
+  crashes the next `WiFi.mode(WIFI_AP)` in `ieee80211_hostap_attach` (LoadProhibited,
+  DEPC=0x0012). `WebServerManager` is split the same way: `begin()` once (routes +
+  SPIFFS), `start()`/`stop()` per session — re-running `begin()` registers duplicate routes.
+- **`esp_wifi_set_max_tx_power()` is in 0.25 dBm units, range [8, 84]** = 2–20 dBm.
+  The inherited `20` was 5 dBm, which is why the AP beacon was invisible to some
+  clients. See `src/settings/wifi_manager.cpp`.
+- **`data/app.js` polls `/api/status` every 400 ms.** Measured on the single-core C3
+  (repeated 60 s windows, `/api/jitter` bench endpoint): the 1 ms-interval sampling
+  task (`TIMING_INTERVAL_MS`, target 1000 samples/s) holds ~996 samples/s with the AP
+  idle, ~880 at 4 Hz polling, ~798 at 10 Hz and ~377 at 25 Hz.
+  Raising the poll rate to make the RSSI bar look smoother directly taxes the radio loop.
+  The remaining ~400 ms stall that appears under any HTTP load happens **outside** the
+  critical section (`outside_max ≈ 400 ms` vs `wait_max ≈ 1.3 ms`, `work_max ≈ 1.8 ms`),
+  so it is CPU preemption by the WiFi/lwIP stack, not lock contention — raising
+  `TIMING_PRIORITY` above lwIP (18) does **not** help (4 Hz dropped to ~770 samples/s at
+  priority 20 vs ~880 at priority 2).
+- **OTA rollback is deferred by 20 s** (`OTA_VERIFY_DELAY_MS` in `src/main.ino`) so a
+  crash-looping image reverts to the other slot. `verifyRollbackLater()` must stay defined
+  with **C linkage** — `initArduino()` calls it through `extern "C"`, so a plain C++
+  definition links but never defers anything. `ota_1` is the rollback slot, **not**
+  StarForgeOS: any web OTA overwrites ota_1 and dual-boot must be re-flashed with esptool.

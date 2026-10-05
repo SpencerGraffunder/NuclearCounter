@@ -35,7 +35,15 @@
 
 // ---- Task scheduling (S3 dual-core: timing pinned to core 1) ----
 #define TIMING_INTERVAL_MS  1
+// Overridable from a build flag (bench A/B only; no production env overrides it).
+// On the single-core C3 the lwIP TCP/IP task runs at 18 and the Wi-Fi driver above
+// that, so priority 2 loses the core to HTTP traffic. MEASURED: raising it to 20 is
+// WORSE for the real 4 Hz UI load (880 -> 770 samples/s) because the timing task then
+// preempts lwIP mid-packet and the whole exchange takes longer; the ~400 ms stalls
+// happen outside the critical section, so priority is not the lever. Keep 2.
+#ifndef TIMING_PRIORITY
 #define TIMING_PRIORITY     2
+#endif
 #define WEB_PRIORITY        1
 
 // ---- RX5808 frequency range (6 bands x 8 channels, 25 MHz spacing) ----

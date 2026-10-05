@@ -184,9 +184,24 @@ void TimingCore::timingTask(void* parameter) {
   uint32_t min_loop_time = UINT32_MAX;
   uint32_t max_loop_time = 0;
   uint32_t total_loop_time = 0;
+
+#ifdef TIMING_JITTER_PROBE
+  // Jitter probe (build-time -DTIMING_JITTER_PROBE; not defined in production).
+  // Measures the interval between successive RSSI SAMPLES, not the duration of
+  // one iteration: with TIMING_INTERVAL_MS = 1 the target is 1000 samples/s, so
+  // any gap above ~1000us is a sample that arrived late because this task
+  // (priority 2) was preempted. On the single-core C3 the lwIP TCP/IP task runs
+  // at priority 18 and the Wi-Fi driver higher still, so HTTP traffic can push
+  // samples out by whole milliseconds.
+  static const uint32_t JITTER_EDGE_US[] = {1000, 1500, 2000, 3000, 5000, 10000, 20000, 50000};
+  static const uint8_t JITTER_NBUCKET = sizeof(JITTER_EDGE_US) / sizeof(JITTER_EDGE_US[0]) + 1;
+#endif
   
   while (true) {
     if (!core->state.activated) {
+#ifdef TIMING_JITTER_PROBE
+      core->jit_deact_iters++;  // 4 of these = a 400 ms sample gap (100 ms each)
+#endif
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
@@ -202,7 +217,41 @@ void TimingCore::timingTask(void* parameter) {
     }
     
     // Take mutex for thread safety
+#ifdef TIMING_JITTER_PROBE
+    uint32_t take_us = micros();
+    if (core->jit_last_give_us) {
+      // Time spent outside the critical section (loop overhead + vTaskDelay +
+      // any preemption by higher-priority tasks). If a 400 ms gap shows up
+      // here rather than in wait/work, the task was starved, not blocked.
+      uint32_t outside_us = take_us - core->jit_last_give_us;
+      if (outside_us > core->jit_outside_max_us) core->jit_outside_max_us = outside_us;
+    }
+#endif
     if (xSemaphoreTake(core->timing_mutex, portMAX_DELAY)) {
+#ifdef TIMING_JITTER_PROBE
+      uint32_t got_us = micros();
+      uint32_t waited_us = got_us - take_us;
+      core->jit_wait_sum_us += waited_us;
+      if (waited_us > core->jit_wait_max_us) core->jit_wait_max_us = waited_us;
+
+      uint32_t sample_us = micros();
+      if (core->jit_last_sample_us) {
+        uint32_t gap_us = sample_us - core->jit_last_sample_us;
+        core->jit_n++;
+        core->jit_sum_us += gap_us;
+        if (gap_us > core->jit_max_us) {
+          core->jit_max_us = gap_us;
+          core->jit_max_at_ms = millis();  // when it happened, to spot periodicity
+        }
+        uint8_t bucket = JITTER_NBUCKET - 1;
+        for (uint8_t i = 0; i < JITTER_NBUCKET - 1; i++) {
+          if (gap_us < JITTER_EDGE_US[i]) { bucket = i; break; }
+        }
+        core->jit_buckets[bucket]++;
+      }
+      core->jit_last_sample_us = sample_us;
+      if (core->jit_window_start_ms == 0) core->jit_window_start_ms = millis();
+#endif
       // Read and filter RSSI
       uint8_t raw_rssi = core->readRawRSSI();
       
@@ -321,6 +370,12 @@ void TimingCore::timingTask(void* parameter) {
       
       last_process_time = current_time;
       xSemaphoreGive(core->timing_mutex);
+#ifdef TIMING_JITTER_PROBE
+      uint32_t work_us = micros() - got_us;
+      core->jit_work_sum_us += work_us;
+      if (work_us > core->jit_work_max_us) core->jit_work_max_us = work_us;
+      core->jit_last_give_us = micros();
+#endif
     }
     
     // Yield to other tasks (especially main loop for serial processing on single-core ESP32-C3)
@@ -345,7 +400,27 @@ void TimingCore::timingTask(void* parameter) {
         Serial.printf("[TimingPerf] Loops/sec: %d, Avg: %dus, Min: %dus, Max: %dus\n", 
                       loops_per_second, avg_loop_time, min_loop_time, max_loop_time);
       }
-      
+
+#ifdef TIMING_JITTER_PROBE
+      // Serial fallback: only when nobody is polling /api/jitter, so the two
+      // readers never fight over the same window.
+      if (core->jit_n && (now - core->jit_last_read_ms) >= 10000) {
+        Serial.printf("[JITTER] n=%lu avg=%luus max=%luus | <1k:%lu 1-1.5k:%lu 1.5-2k:%lu 2-3k:%lu 3-5k:%lu 5-10k:%lu 10-20k:%lu 20-50k:%lu >50k:%lu\n",
+                      (unsigned long)core->jit_n,
+                      (unsigned long)(core->jit_sum_us / core->jit_n),
+                      (unsigned long)core->jit_max_us,
+                      (unsigned long)core->jit_buckets[0], (unsigned long)core->jit_buckets[1],
+                      (unsigned long)core->jit_buckets[2], (unsigned long)core->jit_buckets[3],
+                      (unsigned long)core->jit_buckets[4], (unsigned long)core->jit_buckets[5],
+                      (unsigned long)core->jit_buckets[6], (unsigned long)core->jit_buckets[7],
+                      (unsigned long)core->jit_buckets[8]);
+        core->jit_n = 0;
+        core->jit_sum_us = 0;
+        core->jit_max_us = 0;
+        core->jit_window_start_ms = now;
+        for (uint8_t i = 0; i < JITTER_NBUCKET; i++) core->jit_buckets[i] = 0;
+      }
+#endif
       // Reset counters
       loop_count = 0;
       last_perf_time = now;
@@ -358,6 +433,41 @@ void TimingCore::timingTask(void* parameter) {
     // The check at line 233 already ensures we don't process more than once per TIMING_INTERVAL_MS
   }
 }
+
+#ifdef TIMING_JITTER_PROBE
+bool TimingCore::readJitterStats(JitterStats& out) {
+  // Same mutex the timing task holds while it writes the counters; the wait is
+  // bounded so a bench poll can never block the web handler indefinitely.
+  if (xSemaphoreTake(timing_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+  uint32_t now = millis();
+  out.samples = jit_n;
+  out.sum_us = jit_sum_us;
+  out.max_us = jit_max_us;
+  for (uint8_t i = 0; i < 9; i++) out.buckets[i] = jit_buckets[i];
+  out.window_ms = jit_window_start_ms ? (now - jit_window_start_ms) : 0;
+  out.wait_max_us = jit_wait_max_us;
+  out.wait_sum_us = jit_wait_sum_us;
+  out.work_max_us = jit_work_max_us;
+  out.max_at_ms = jit_max_at_ms;
+  out.outside_max_us = jit_outside_max_us;
+  out.deact_iters = jit_deact_iters;
+  jit_n = 0;
+  jit_sum_us = 0;
+  jit_max_us = 0;
+  jit_max_at_ms = 0;
+  jit_outside_max_us = 0;
+  jit_deact_iters = 0;
+  jit_wait_sum_us = 0;
+  jit_wait_max_us = 0;
+  jit_work_sum_us = 0;
+  jit_work_max_us = 0;
+  jit_window_start_ms = now;
+  jit_last_read_ms = now;
+  for (uint8_t i = 0; i < 9; i++) jit_buckets[i] = 0;
+  xSemaphoreGive(timing_mutex);
+  return true;
+}
+#endif
 
 uint8_t TimingCore::readRawRSSI() {
   // Check if frequency was recently changed - RSSI is unstable during tuning

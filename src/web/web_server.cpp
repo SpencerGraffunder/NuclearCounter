@@ -194,6 +194,13 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _server.on("/api/set_threshold", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetThreshold(request); });
     _server.on("/api/get_channels", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetChannels(request); });
     _server.on("/api/spiffs_info", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetSPIFFSInfo(request); });
+#ifdef TIMING_JITTER_PROBE
+    // Bench-only (compiled out of every production env; see [env:JITTER_C3]).
+    // Sample-interval stats are served over HTTP on purpose: opening this
+    // board's USB serial port resets it (rst:0x15 USB_UART_CHIP_RESET), which
+    // would drop the AP mid-measurement.
+    _server.on("/api/jitter", HTTP_GET, [this](AsyncWebServerRequest* request) { handleJitter(request); });
+#endif
 
     // OTA: app-slot firmware updates + data partition (SPIFFS) file ops
     _otaManager.begin(&_server);
@@ -777,6 +784,34 @@ void WebServerManager::handleAppJS(AsyncWebServerRequest* request) {
         );
     }
 }
+
+#ifdef TIMING_JITTER_PROBE
+void WebServerManager::handleJitter(AsyncWebServerRequest* request) {
+    TimingCore::JitterStats s;
+    if (!_timingCore || !_timingCore->readJitterStats(s)) {
+        request->send(500, "application/json", "{\"error\":\"jitter_read_failed\"}");
+        return;
+    }
+    char buf[400];
+    snprintf(buf, sizeof(buf),
+             "{\"samples\":%lu,\"window_ms\":%lu,\"avg_us\":%lu,\"max_us\":%lu,\"max_at_ms\":%lu,"
+             "\"wait_max_us\":%lu,\"wait_sum_us\":%lu,\"work_max_us\":%lu,"
+             "\"outside_max_us\":%lu,\"deact_iters\":%lu,"
+             "\"buckets\":{\"lt1k\":%lu,\"1k_1.5k\":%lu,\"1.5k_2k\":%lu,\"2k_3k\":%lu,"
+             "\"3k_5k\":%lu,\"5k_10k\":%lu,\"10k_20k\":%lu,\"20k_50k\":%lu,\"gt50k\":%lu}}",
+             (unsigned long)s.samples, (unsigned long)s.window_ms,
+             s.samples ? (unsigned long)(s.sum_us / s.samples) : 0UL,
+             (unsigned long)s.max_us,
+             (unsigned long)s.max_at_ms,
+             (unsigned long)s.wait_max_us, (unsigned long)s.wait_sum_us,
+             (unsigned long)s.work_max_us,
+             (unsigned long)s.outside_max_us, (unsigned long)s.deact_iters,
+             (unsigned long)s.buckets[0], (unsigned long)s.buckets[1], (unsigned long)s.buckets[2],
+             (unsigned long)s.buckets[3], (unsigned long)s.buckets[4], (unsigned long)s.buckets[5],
+             (unsigned long)s.buckets[6], (unsigned long)s.buckets[7], (unsigned long)s.buckets[8]);
+    request->send(200, "application/json", buf);
+}
+#endif
 
 void WebServerManager::handleNotFound(AsyncWebServerRequest* request) {
     request->send(404, "text/plain", "File not found");

@@ -70,6 +70,9 @@ private:
     void handleSetThreshold(AsyncWebServerRequest* request);
     void handleGetChannels(AsyncWebServerRequest* request);
     void handleGetSPIFFSInfo(AsyncWebServerRequest* request);
+#ifdef TIMING_JITTER_PROBE
+    void handleJitter(AsyncWebServerRequest* request);
+#endif
     void handleStyleCSS(AsyncWebServerRequest* request);
     void handleAppJS(AsyncWebServerRequest* request);
     void handleNotFound(AsyncWebServerRequest* request);
