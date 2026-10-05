@@ -11,7 +11,10 @@
 #define BUILD_SHA "dev"
 #endif
 
-#define VERSION "v2.1.0-" BUILD_SHA
+// Beta line: the about page is 3 centered lines (7x13B name, 5x7 by-line and
+// version). "v3.0.0-beta1-<sha>" measures 100px in the 5x7 font, which fits
+// inside the safe drawing width (x=4..120); a longer suffix would clip.
+#define VERSION "v3.0.0-beta1-" BUILD_SHA
 #define APP_NAME "NuclearCounter"
 #define APP_BY "by NuclearQuads"
 

@@ -1,4 +1,5 @@
 #include "RX5808.h"
+#include "config/config.h"   // CONFIG_SINGLE_CORE (chip-aware) for the scan-task pinning guard
 
 // Initialise RX5808 module
 RX5808::RX5808(uint8_t data, uint8_t le, uint8_t clk, uint8_t rssi, Settings *s)

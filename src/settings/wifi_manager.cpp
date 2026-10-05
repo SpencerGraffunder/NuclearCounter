@@ -43,11 +43,15 @@ bool WiFiManager::setupAP() {
 
     delay(200); // Delay 200ms to ensure the AP is ready
 
-    // Force MAX TX power (20 dBm). The board's NVS holds no WiFi PHY
-    // calibration, so the driver's default TX power is too low and the AP
-    // beacon is invisible to other devices. Must be set after WiFi.mode()
-    // and before softAP() to take effect.
-    esp_wifi_set_max_tx_power(20);
+    // Force MAX TX power. GOTCHA: esp_wifi_set_max_tx_power() takes 0.25 dBm
+    // units, range [8, 84] = 2 dBm .. 20 dBm. Passing 20 (as the original SFOS
+    // code did) means 5 dBm — i.e. it LOWERED power ~12 dB below the framework
+    // default (CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=20 dBm on both S3 and C3),
+    // which is the likely reason the AP beacon was hard to see. 84 = 20 dBm.
+    // Must be set after WiFi.mode() and before softAP() to take effect.
+    // Verified by readback below so a wrong unit shows up in the log.
+    esp_err_t txErr = esp_wifi_set_max_tx_power(84);
+    if (txErr != ESP_OK) Serial.printf("TX power set failed: %d\n", (int)txErr);
 
     Serial.printf("Starting AP with SSID: %s\n", _apSSID.c_str());
 
@@ -61,6 +65,14 @@ bool WiFiManager::setupAP() {
 
         // Set WiFi protocol AFTER AP is started
         esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11N);
+
+        // Readback AFTER the radio is started (esp_wifi_get_max_tx_power returns
+        // an error before esp_wifi_start). Confirms the 0.25 dBm-unit value took
+        // effect — expected 84 = 20.00 dBm.
+        int8_t actual = 0;
+        if (esp_wifi_get_max_tx_power(&actual) == ESP_OK) {
+            Serial.printf("TX power in effect: %d (0.25dBm units) = %.2f dBm\n", actual, actual * 0.25);
+        }
 
         return true;
     } else {

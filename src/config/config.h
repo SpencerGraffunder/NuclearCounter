@@ -21,8 +21,17 @@
 // ---- Lap / history storage ----
 #define MAX_LAPS_STORED         50
 #define RSSI_SAMPLE_INTERVAL_MS 20    // 50 Hz
-#define RSSI_HISTORY_ENABLED    1     // race-data export (10000 samples ~ 150KB heap, allocated at race start)
-#define RSSI_HISTORY_SIZE       10000 // 20000 samples (400 s) at 50 Hz; 10000 keeps RAM ~150KB
+#define RSSI_HISTORY_ENABLED    1     // race-data export (heap buffer allocated at race start)
+// RSSISample is 8 bytes (uint32 + uint8 padded), so the buffer is size*8.
+// Measured on the C3 board: ~191 KB free heap before the AP, ~100 KB after the
+// WiFi stack comes up. The S3 has more headroom, so the C3 gets a smaller
+// buffer: 6000 samples = 48 KB, leaving ~52 KB for the WiFi/LWIP runtime.
+// At 50 Hz that is 120 s of race data on the C3 (400 s on the S3).
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32C3_DEV)
+#define RSSI_HISTORY_SIZE       6000
+#else
+#define RSSI_HISTORY_SIZE       10000
+#endif
 
 // ---- Task scheduling (S3 dual-core: timing pinned to core 1) ----
 #define TIMING_INTERVAL_MS  1
@@ -47,7 +56,17 @@
 #define ENABLE_AUDIO            0
 #define ENABLE_BATTERY_MONITOR  0
 
-// ---- Core count (S3 = dual core; C3 builds don't use this config) ----
+// ---- Core count ----
+// RX5808.cpp's scan-task pinning guard reads this. Single-core targets (C3)
+// have no core 1, so it must be 1 there — pinning to core 1 on a single-core
+// build fails at runtime. Made chip-aware so a C3 env cannot accidentally
+// inherit the S3 value (RX5808.cpp now includes this header so the guard sees
+// it regardless of the env's build_flags).
+#if defined(CONFIG_IDF_TARGET_ESP32C3) || defined(ARDUINO_ESP32C3_DEV) || defined(CONFIG_FREERTOS_UNICORE)
+#undef CONFIG_SINGLE_CORE
+#define CONFIG_SINGLE_CORE 1
+#else
 #ifndef CONFIG_SINGLE_CORE
 #define CONFIG_SINGLE_CORE 0
+#endif
 #endif
