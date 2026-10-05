@@ -1,6 +1,6 @@
 #include <esp_ota_ops.h>
-// TEMP diagnostics: 1s heartbeat + stage prints (the define lives in menu.h so
-// menu.cpp sees it too). Remove once the timer-page hang is resolved.
+// Optional diagnostics (loop heartbeat + button trace); the opt-in define lives in
+// menu.h so menu.cpp sees it too. Off by default — see the note there.
 #include "battery.h"
 #include "buzzer.h"
 #include "menu.h"

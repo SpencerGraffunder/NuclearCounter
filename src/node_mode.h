@@ -35,10 +35,10 @@ public:
     // Lap crossing forwarded by IntegratedMode from the timing-core lap
     // callback. The node's _lastPass is updated here (NOT by draining the
     // timing-core ring in process()) so the RotorHazard lap counter stays in
-    // step even while the node protocol is paused (timer/scanner pages open).
+    // step even when the protocol is not being polled (scanner page open).
     // See onTimingLap in integrated.cpp for the root cause.
     void onLap(const LapData &lap);
-    
+
     friend struct Message;  // Allow Message to access private members
 
 private:

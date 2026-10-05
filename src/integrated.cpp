@@ -59,11 +59,16 @@ void IntegratedMode::process() {
   tickRace();  // countdown / go-flash / lap-flash / status line (runs in all modes)
   if (_mode == IntMode::NODE) {
     _node.process();  // includes handleSerialInput()
+  } else if (_mode == IntMode::TIMER) {
+    // RotorHazard stays connected while the timer page is open: the protocol is
+    // served from the live timing-core state, so the server keeps seeing the node,
+    // can still set frequency/thresholds, and receives laps from the page-run
+    // session. The OLED page reads the same timing-core state, so both views agree.
+    _node.handleSerialInput();
   } else {
-    // SCANNING / TIMER: the RotorHazard host is not in control; discard any
-    // protocol bytes so stale commands (e.g. WRITE_FREQUENCY) can't steer the
-    // scanner or timer. The USB CDC port itself stays alive (esptool
-    // auto-download-mode flashing depends on it).
+    // SCANNING: the RotorHazard host is not in control; discard any protocol
+    // bytes so stale commands (e.g. WRITE_FREQUENCY) can't steer the scanner.
+    // The timing core is deactivated here, so reads would report stale values.
     drainSerial();
   }
   if (_mode != IntMode::SCANNING) {

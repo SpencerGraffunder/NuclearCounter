@@ -6,7 +6,7 @@
 // build_flags; it is deliberately NOT defined by default because the heartbeat
 // prints every second, and on USB-CDC builds a host that has the port open but is
 // not reading will eventually fill the TX FIFO and stall loop() (see the
-// Serial.setTxTimeoutMs(0) note in src/main.ino setup()).
+// Serial.setTxTimeoutMs() note in src/main.ino setup()).
 //#define C3_DEBUG_HEARTBEAT 1
 
 #include <Arduino.h>
