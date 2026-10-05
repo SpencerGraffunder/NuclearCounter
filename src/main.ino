@@ -46,8 +46,16 @@ IntegratedMode integrated(&settings, &module, &buzzer);
 // with verifyRollbackLater() (a weak hook the core consults at startup) and
 // confirming after OTA_VERIFY_DELAY_MS of stable uptime instead covers
 // crashes anywhere in boot, including setup() and the first seconds of loop().
+//
+// GOTCHA: the hook must be extern "C". It is declared and defined in the core's
+// C file (cores/esp32/esp32-hal-misc.c) as a weak C symbol; a plain C++
+// definition here gets name-mangled to _Z18verifyRollbackLaterv, so the core's
+// weak version stays in force and verification runs immediately — silently
+// disabling the whole deferred-rollback path. Check with
+// `riscv32-esp-elf-nm firmware.elf | grep verifyRollbackLater` : it must be `T`
+// (strong), not `W` (weak).
 static const uint32_t OTA_VERIFY_DELAY_MS = 20000;
-bool verifyRollbackLater() { return true; }
+extern "C" bool verifyRollbackLater() { return true; }
 #endif
 
 // Create menu object

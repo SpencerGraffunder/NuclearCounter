@@ -59,6 +59,7 @@ void OtaManager::handleStatus(AsyncWebServerRequest* request) {
                        running ? running->label : "?",
                        otaStateName(state), (unsigned)received, (unsigned)expected);
 
+    uint8_t slotIdx = 0;
     for (const char* label : {"ota_0", "ota_1"}) {
         const esp_partition_t* p = findSlot(label);
         esp_ota_img_states_t imgState = ESP_OTA_IMG_UNDEFINED;
@@ -68,7 +69,11 @@ void OtaManager::handleStatus(AsyncWebServerRequest* request) {
                          : imgState == ESP_OTA_IMG_VALID ? "valid"
                          : imgState == ESP_OTA_IMG_INVALID ? "invalid"
                          : imgState == ESP_OTA_IMG_ABORTED ? "aborted" : "undefined";
-        if (len > 0) len += snprintf(buf + len, sizeof(buf) - len, ",");
+        // Comma BETWEEN elements. Emitting it on `len > 0` is always true here (the
+        // header snprintf already filled the buffer), which produced a stray leading
+        // comma: "slots":[,{...}] — invalid JSON that broke the web UI's OTA panel.
+        if (slotIdx) len += snprintf(buf + len, sizeof(buf) - len, ",");
+        slotIdx++;
         len += snprintf(buf + len, sizeof(buf) - len,
                         "{\"label\":\"%s\",\"size\":%u,\"image\":\"%s\",\"running\":%s}",
                         label, p ? (unsigned)p->size : 0, s,
