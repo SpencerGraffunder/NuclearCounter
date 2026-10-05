@@ -197,7 +197,13 @@ void NodeMode::begin(TimingCore* timingCore) {
     // This prevents resetting frequency/threshold when mode is re-initialized
     static bool first_init = true;
     if (first_init) {
-        _settings.vtxFreq = 5800;
+        // Seed the node's cached settings from the timing core (which loaded them
+        // from NVS), NOT from hardcoded defaults. If the cache disagrees with the
+        // hardware, RotorHazard's write-then-read-back validation fails forever:
+        // RH writes 5800, the "only if changed" guard sees the cached 5800 and
+        // skips the write, so the read-back returns the NVS frequency (e.g. 5732)
+        // and RH logs "Value 16v Not Set" on every retry.
+        _settings.vtxFreq = _timingCore ? (int)_timingCore->getState().frequency_mhz : 5800;
         _settings.enterAtLevel = ENTER_RSSI;  // Use config.h value, not hardcoded
         _settings.exitAtLevel = EXIT_RSSI;    // Use config.h value, not hardcoded
         _nodeIndex = 0;
@@ -340,12 +346,13 @@ void Message::handleWriteCommand(bool serialFlag) {
             if (freq >= MIN_FREQ && freq <= MAX_FREQ) {
                 // Set frequency via timing core AND update settings
                 if (nodeMode && nodeMode->_timingCore) {
-                    // Only update if frequency actually changed (matches RotorHazard behavior)
-                    if (freq != nodeMode->_settings.vtxFreq) {
-                        nodeMode->_settings.vtxFreq = freq;  // Update stored settings
-                        nodeMode->_timingCore->setFrequency(freq);
-                        settingChangedFlags |= FREQ_CHANGED;
-                    }
+                    // Apply unconditionally. RotorHazard validates every write by
+                    // reading the value back, so the read-back must reflect what was
+                    // written even when the cached setting already equals it — the
+                    // cached setting and the hardware can disagree (NVS vs defaults).
+                    nodeMode->_settings.vtxFreq = freq;
+                    nodeMode->_timingCore->setFrequency(freq);
+                    settingChangedFlags |= FREQ_CHANGED;
                     nodeMode->_timingCore->setActivated(true);  // Activate node after frequency is set
                     // Reset peak tracking when frequency changes
                     TimingState state = nodeMode->_timingCore->getState();
