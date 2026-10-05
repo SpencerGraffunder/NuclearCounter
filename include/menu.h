@@ -1,6 +1,14 @@
 #ifndef MENU_H
 #define MENU_H
 
+// Opt-in diagnostics (loop heartbeat + button-press trace), defined here so both
+// main.ino and menu.cpp see it. Enable with -D C3_DEBUG_HEARTBEAT=1 in the env's
+// build_flags; it is deliberately NOT defined by default because the heartbeat
+// prints every second, and on USB-CDC builds a host that has the port open but is
+// not reading will eventually fill the TX FIFO and stall loop() (see the
+// Serial.setTxTimeoutMs(0) note in src/main.ino setup()).
+//#define C3_DEBUG_HEARTBEAT 1
+
 #include <Arduino.h>
 #include <U8g2lib.h>
 #include "about.h"
@@ -57,6 +65,9 @@ public:
   void sendBuffer();
   void drawMenu();
   void drawBatteryVoltage(int voltage);
+  // Diagnostic: which page is actually being drawn. The loop heartbeat prints it
+  // so a "frozen" screen can be told from a page that never changed.
+  int debugMenuIndex() const { return (int)menuIndex; }
 
 private:
   // Menu data structures

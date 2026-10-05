@@ -126,18 +126,30 @@ bool IntegratedMode::enterTimer() {
   }
   if (!_apUp) {
     Serial.println(F("Starting WiFi timer..."));
+#ifdef C3_DEBUG_AUTO_TIMER
+    Serial.printf("[T] heap before setupAP: %lu\n", ESP.getFreeHeap());
+#endif
     if (!_wifi.setupAP()) {
       Serial.println(F("WiFi AP failed to start"));
       startNode();
       return false;
     }
+#ifdef C3_DEBUG_AUTO_TIMER
+    Serial.println("[T] setupAP returned ok");
+#endif
     if (!_webBegun) {
       // One-time: register routes + mount SPIFFS (both survive AP
       // down/up cycles; only the TCP listener needs re-binding)
       _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
       _webBegun = true;
+#ifdef C3_DEBUG_AUTO_TIMER
+      Serial.println("[T] web.begin done");
+#endif
     }
     _web.start();  // wait for IP, mDNS, TCP listener
+#ifdef C3_DEBUG_AUTO_TIMER
+    Serial.println("[T] web.start done");
+#endif
     _apUp = true;
   }
   _timing.setActivated(true);

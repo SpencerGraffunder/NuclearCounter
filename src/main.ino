@@ -1,4 +1,6 @@
 #include <esp_ota_ops.h>
+// TEMP diagnostics: 1s heartbeat + stage prints (the define lives in menu.h so
+// menu.cpp sees it too). Remove once the timer-page hang is resolved.
 #include "battery.h"
 #include "buzzer.h"
 #include "menu.h"
@@ -58,6 +60,23 @@ Menu menu(PREVIOUS_BUTTON_PIN, SELECT_BUTTON_PIN, NEXT_BUTTON_PIN, &settings, &b
 void setup() {
   // Setup serial for debugging
   Serial.begin(115200);
+  // USB-CDC writes are blocking by default (tx_timeout_ms = 250 ms in
+  // USBCDC::write): if the host has the port open but is not draining the TX
+  // FIFO, every Serial.print stalls loop() until it times out. That is what made
+  // the board look dead to button presses while plugged into USB, while working
+  // fine unplugged (tud_cdc_n_connected() is false then, so write() returns
+  // immediately). Timeout 0 makes writes drop instead of block, so no host-side
+  // stall can ever starve the main loop.
+// Bounded, not zero: 0 would drop frames outright when the TX FIFO is full, which
+// can lose a RotorHazard protocol response. 20 ms keeps a stall per write bounded
+// (the old default was 250 ms, which starved the main loop ~10x whenever the host
+// had the port open but was not draining it) while still flushing normally.
+#ifndef SERIAL_TX_TIMEOUT_MS
+#define SERIAL_TX_TIMEOUT_MS 20
+#endif
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(SERIAL_TX_TIMEOUT_MS);
+#endif
   delay(150);
 
   // Load settings from non-volatile memory
@@ -74,6 +93,8 @@ void setup() {
 
   // Double buzz for initialisation complete
   buzzer.doubleBuzz();
+
+
 
   // Allow for serial to connect
   delay(200);
@@ -92,10 +113,39 @@ void loop() {
   }
 #endif
 
-  // Update battery voltage each loop
-  battery.updateBatteryVoltage();
+  // Opt-in diagnostics (see C3_DEBUG_HEARTBEAT in include/menu.h). The heartbeat
+  // reports both millis() and the loop iteration count: if the loop stalls (a
+  // blocking USB-CDC write), millis() advances without iterations, so a beat whose
+  // iteration delta is ~0 while its millis delta is >1000 proves a stall.
+  static int traceN = 0;
+  static uint32_t lastBeat = 0;
+  static uint32_t iterations = 0;
+  static uint32_t prevIter = 0, maxIterMs = 0;
+  uint32_t now = millis();
+  uint32_t dt = now - prevIter;
+  if (dt > maxIterMs) maxIterMs = dt;   // a blocking USB-CDC write shows up here
+  prevIter = now;
+#ifdef C3_DEBUG_HEARTBEAT
+  iterations++;
+  bool trace = traceN < 10;
+  if (trace) { traceN++; Serial.printf("[L%d] top\n", traceN); }
+  else if (millis() - lastBeat >= 1000) {
+    lastBeat = millis();
+    // Raw button pin levels: if a press shows no change here, the pin is being
+    // held by something external (USB), not a logic problem.
+    Serial.printf("[BEAT] mode=%d page=%d btn P=%d S=%d N=%d heap=%lu iter=%lu maxIterMs=%lu\n",
+                  (int)integrated.mode(), menu.debugMenuIndex(),
+                  digitalRead(PREVIOUS_BUTTON_PIN), digitalRead(SELECT_BUTTON_PIN),
+                  digitalRead(NEXT_BUTTON_PIN), ESP.getFreeHeap(),
+                  iterations, maxIterMs);
+  }
+#endif
 
-  // Start battery alarm if low voltage
+  battery.updateBatteryVoltage();
+#ifdef C3_DEBUG_HEARTBEAT
+  if (trace) Serial.println("  - battery ok");
+#endif
+
   if (battery.lowBattery()) {
     buzzer.startAlarm();
   } else {
@@ -103,19 +153,22 @@ void loop() {
   }
 
 #ifdef INTEGRATED
-  // Background mode work (RotorHazard node serial protocol, timing)
   integrated.process();
+#ifdef C3_DEBUG_HEARTBEAT
+  if (trace) Serial.println("  - process ok");
+#endif
 #endif
 
-  // Handle button presses
-  // Menu object internally stores which menu currently on
   menu.handleButtons();
+#ifdef C3_DEBUG_HEARTBEAT
+  if (trace) Serial.println("  - buttons ok");
+#endif
 
-  // Clear display buffer
   menu.clearBuffer();
-
-  // Draw menus using internal menu and settings states
   menu.drawMenu();
+#ifdef C3_DEBUG_HEARTBEAT
+  if (trace) Serial.println("  - draw ok");
+#endif
 
   // Draw battery voltage
   menu.drawBatteryVoltage(battery.currentVoltage.get());

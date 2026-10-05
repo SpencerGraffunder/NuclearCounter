@@ -129,17 +129,19 @@ void Menu::handleButtons() {
   if (selectPressed == HIGH) {
     if (selectButtonPressTime == 0) {  // Button just pressed so record time
       selectButtonPressTime = millis();
-
-      // Sound buzzer on button press if necessary. On the timer page the
-      // Start control plays its own race beeps (countdown / Go! / stop)
-      // on release, so skip the generic press beep there to avoid a doubled
-      // cue; the other two controls rely on this single press beep.
-#ifdef INTEGRATED
-      bool skipPressBeep = (menuIndex == WIFI && _timerCtrlCursor == TP_CTRL_START);
-#else
-      bool skipPressBeep = false;
+#ifdef C3_DEBUG_HEARTBEAT
+      // Trace: proves the press is registered at all. If a "frozen" screen still
+      // prints these, the buttons are being read and the page is the question.
+      Serial.printf("[BTN] select page=%d item=%d\n", (int)menuIndex,
+                    menus[menuIndex].menuIndex);
 #endif
-      if (settings->buzzer.get() && !skipPressBeep) buzzer->buzz();
+
+      // Sound buzzer on button press if necessary. Every control on the timer
+      // page gets this press beep, including Start — its race beeps (countdown
+      // / Go! / stop) come later, on RELEASE, so the press beep is the cue that
+      // the button was registered. (It used to be suppressed for Start to avoid
+      // a doubled cue, which made Start feel dead when held.)
+      if (settings->buzzer.get()) buzzer->buzz();
     } else if (!selectButtonHeld && millis() - selectButtonPressTime > LONG_PRESS_DURATION) {  // Held longer than threshold register long press
 #ifdef INTEGRATED
       // Long-press = go back one level toward MAIN. The scanner and WiFi
@@ -585,20 +587,28 @@ static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
 // 7. The control block still fits: its highlight box ends at row 58 < 64.
 static const int TP_ROW0_Y = 7, TP_ROW1_Y = 17, TP_ROW2_Y = 27, TP_ROW3_Y = 37;
 static const int TP_CTRL_LABEL_Y = 47, TP_CTRL_VALUE_Y = 57;
-// Control block: four elements (RSSI / Min Lap / Chan / Start), each sized
-// to the widest of its label/value + 2px margin (5x7 is monospace, 5px/char):
-// "145/205" and "Min Lap" need 35px -> 37px columns; "Chan"/"Start"/"Race"
-// fit in 22px. Total = 37+37+22+22 = 118 + 3 gaps of 3px + 2px right margin
-// = 128 (exactly the panel width). Label + value text is centered inside the
+// Control block: four elements (RSSI / MinLap / Chan / Start), each sized
+// to the widest of its label/value + 2px margin (measured with the real 5x7
+// font, which advances 5px/char but has no trailing gap on the last glyph):
+//   RSSI   value "145/205" = 35px -> 37px
+//   MinLap label "MinLap"   = 29px -> 31px   (no space: the space used to cost
+//                                            an extra 5px and forced a 37px box)
+//   Chan   label "Chan"     = 19px -> 21px
+//   Start  label "Start"    = 24px -> 25px   (a 22px box was NARROWER than the
+//                                            word, so the highlight did not cover
+//                                            the label when Start was selected)
+// The space freed by MinLap is deliberately placed between Chan and Start so
+// those two are not cramped: 37 + 3 + 31 + 3 + 21 + 6 + 25 = 126 + 2px right
+// margin = 128 (the panel width). Label + value text is centered inside the
 // element; the selection highlight spans the whole element.
-// NOTE: col3's box (cols 104-125) deliberately reaches into the 6px right
+// NOTE: col3's box (cols 101-126) deliberately reaches into the 6px right
 // black-guard zone (cols 122-127, see Menu::begin) — same trade-off the main
 // menu's full-width highlight makes. If this panel's glass defect bleeds at
 // the box's right edge, cap that box's width instead of the others.
-static const int TP_X0 = 0, TP_W0 = 37;   // Cross RSSI  ("RSSI" / "145/205")
-static const int TP_X1 = 40, TP_W1 = 37;  // Min Lap    ("Min Lap" / "60s")
-static const int TP_X2 = 80, TP_W2 = 22;  // Channel    ("Chan" / "R5")
-static const int TP_X3 = 104, TP_W3 = 22; // Start      ("Start" / "Race")
+static const int TP_X0 = 0,  TP_W0 = 37;  // Cross RSSI  ("RSSI" / "145/205")
+static const int TP_X1 = 40, TP_W1 = 31;  // Min lap     ("MinLap" / "60s")
+static const int TP_X2 = 74, TP_W2 = 21;  // Channel     ("Chan" / "R5")
+static const int TP_X3 = 101, TP_W3 = 25; // Start       ("Start"/"Stop" + "Race")
 
 // 2-decimal lap value ("12.34"), no trailing "s".
 static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
@@ -692,8 +702,12 @@ static void tpDrawControl(U8G2 *u, int colX, int colW, const char *label,
 //   Last   --.--        Best   --.--
 //   Laps   ---          Best 3 --.--
 //   Time   --:--/Start  RSSI   62
-//   [  RSSI  ][ Min Lap ][Chan][Start]   (4 elements, widths per element)
-//   [145/205 ][  10s    ][ R5 ][Race ]   (label + value centered in each)
+//   [ RSSI  ][ MinLap ][Chan][ Start/Stop ]   (4 elements, widths per element)
+//   [145/205][  10s   ][ R5 ][    Race    ]   (label + value centered in each)
+// The Start element's LABEL changes with the race state so the two lines read
+// as an action: "Start Race" when idle, "Stop Race" once the countdown has
+// started or the race is running. Longest string is "Start" (24px) which is
+// what sizes that column.
 void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
   char v[16];
@@ -792,7 +806,7 @@ void Menu::drawTimerMenu() {
 
   char minVal[6];
   snprintf(minVal, sizeof(minVal), "%ds", integrated->getMinLapSeconds());
-  tpDrawControl(&u8g2, TP_X1, TP_W1, "Min Lap", minVal, minLapState, hlStart, hlLen);
+  tpDrawControl(&u8g2, TP_X1, TP_W1, "MinLap", minVal, minLapState, hlStart, hlLen);
 
   // Channel value "R5" = band letter + channel number (1-8). Band letters are
   // the freqTable rows (A/B/E/F/R/L) — the same table the web UI exposes.
@@ -804,8 +818,12 @@ void Menu::drawTimerMenu() {
            channel + 1);
   tpDrawControl(&u8g2, TP_X2, TP_W2, "Chan", chanVal, chanState, hlStart, hlLen);
 
-  const char *startVal = integrated->raceActive() ? "Stop" : "Race";
-  tpDrawControl(&u8g2, TP_X3, TP_W3, "Start", startVal, startState, 0, 0);
+  // Start control reads as an action: "Start Race" when idle, "Stop Race" as
+  // soon as the countdown is running or the race is active (the countdown counts
+  // as ongoing — you can cancel it by pressing again).
+  bool startIsStop = integrated->raceActive() || integrated->countdownActive();
+  tpDrawControl(&u8g2, TP_X3, TP_W3, startIsStop ? "Stop" : "Start", "Race",
+                startState, 0, 0);
 }
 
 // ENTER on the timer page: act on the currently selected control.
@@ -851,6 +869,9 @@ void Menu::timerCtrlSelect() {
 // Cross RSSI and min lap step by 2; band/channel step by 1 (small domains).
 // Cross RSSI keeps the enter > exit invariant; min lap is clamped 0..60 s.
 void Menu::timerCtrlAdjust(int direction) {
+  // RSSI steps by 2 (coarse, the values are ADC-ish and move fast); MinLap and
+  // channel step by 1 — a lap time is read in whole seconds, so ±2 would skip
+  // values the user can actually pick on the web slider.
   int step = 2 * direction;
   if (_timerCtrlCursor == TP_CTRL_RSSI) {
     if (_timerCtrlEditField == 0) {
@@ -870,7 +891,7 @@ void Menu::timerCtrlAdjust(int direction) {
     }
   } else if (_timerCtrlCursor == TP_CTRL_MINLAP) {
     int sec = integrated->getMinLapSeconds();
-    sec += step;
+    sec += direction;  // ±1 second, not the RSSI step of 2
     if (sec < 0) sec = 0;
     if (sec > 60) sec = 60;
     integrated->setMinLapSeconds(sec);

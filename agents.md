@@ -31,3 +31,19 @@ and point at the code.
   never drawn — see `Menu::begin`).
 - The panel **retains the last frame across a reset/hang**, so a board that
   resets mid-transition looks frozen on the old screen.
+
+## USB CDC serial gotcha (NuclearCounter C3/S3) — blocking writes starve the main loop
+
+- With `ARDUINO_USB_CDC_ON_BOOT=1`, `Serial` is `USBCDC`, and `USBCDC::write()`
+  **blocks up to `tx_timeout_ms` (default 250 ms)** when the host has the port open
+  but is not draining the TX FIFO. Measured on hardware: the main loop ran at
+  ~40 iterations/s while a host was reading, but dropped to ~4 iterations/s while
+  the port was open and unread — i.e. ~250 ms per iteration. That is what made the
+  board look dead to button presses while plugged into USB, while working fine
+  unplugged (`tud_cdc_n_connected()` is false then, so `write()` returns at once).
+- Fix: `Serial.setTxTimeoutMs(20)` in `setup()` — bounded, not 0 (0 drops frames
+  outright, which can lose a RotorHazard protocol response). Guard it with
+  `#if ARDUINO_USB_CDC_ON_BOOT`: `HardwareSerial` has no `setTxTimeoutMs`.
+- Consequence: never put a periodic `Serial.print` in `loop()` in a shipping build.
+  The loop heartbeat / button trace is now opt-in via `-D C3_DEBUG_HEARTBEAT=1`
+  (see `include/menu.h`), not defined by default.
