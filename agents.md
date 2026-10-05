@@ -69,6 +69,13 @@ and point at the code.
   so it is CPU preemption by the WiFi/lwIP stack, not lock contention — raising
   `TIMING_PRIORITY` above lwIP (18) does **not** help (4 Hz dropped to ~770 samples/s at
   priority 20 vs ~880 at priority 2).
+- There is a residual **400 ms** stall (measured `max_us` = 400030 µs, always the same
+  length) that appears under HTTP load roughly once per 75 s and roughly once per 300 s
+  with the AP idle but a client associated. It is not lock contention and not the
+  deactivated-task delay (`deact_iters = 0`), so it is a WiFi/lwIP stack event. It is not
+  worth chasing further: lap detection is peak-capture based (`rssi_peak_time_ms` in
+  `TimingCore::process`), so a 400 ms blind spot shifts a captured peak by at most a few
+  hundred ms and does not drop the lap.
 - **OTA rollback is deferred by 20 s** (`OTA_VERIFY_DELAY_MS` in `src/main.ino`) so a
   crash-looping image reverts to the other slot. `verifyRollbackLater()` must stay defined
   with **C linkage** — `initArduino()` calls it through `extern "C"`, so a plain C++
