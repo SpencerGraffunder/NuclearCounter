@@ -10,8 +10,9 @@
 #     partitions.bin         0x8000
 #     nuclearcounter-ota0.bin  ota_0  (NuclearCounter)
 #     starforge-ota1.bin     ota_1  (StarForgeOS)
-#     hertzhunter-ui.bin     spiffs (NC integrated web UI, S3 packages)
-#     starforge-ui.bin       spiffs (StarForgeOS web UI, C3 / older packages)
+#     nuclearcounter-ui.bin   spiffs (NuclearCounter INTEGRATED web UI, v3.0 packages)
+#     hertzhunter-ui.bin     spiffs (same UI, older v3.0 packages)
+#     starforge-ui.bin       spiffs (StarForgeOS web UI, v2.1 C3 package)
 #
 # Usage:
 #   ./flash.sh                 # auto-detect the serial port
@@ -42,12 +43,14 @@ done < manifest.txt
 for f in bootloader.bin partitions.bin nuclearcounter-ota0.bin starforge-ota1.bin; do
   [ -f "$f" ] || { echo "ERROR: missing $f" >&2; exit 1; }
 done
-# Shared spiffs UI image: hertzhunter-ui.bin (NC INTEGRATED build, S3 packages)
-# or starforge-ui.bin (SFOS build, C3 packages / older S3 packages)
+# Shared spiffs UI image: nuclearcounter-ui.bin (NC INTEGRATED build, v3.0
+# packages), then hertzhunter-ui.bin (same UI under its old name), then
+# starforge-ui.bin (SFOS build, v2.1 C3 package)
 UI_BIN=""
-[ -f hertzhunter-ui.bin ] && UI_BIN="hertzhunter-ui.bin"
+[ -f nuclearcounter-ui.bin ] && UI_BIN="nuclearcounter-ui.bin"
+[ -z "$UI_BIN" ] && [ -f hertzhunter-ui.bin ] && UI_BIN="hertzhunter-ui.bin"
 [ -z "$UI_BIN" ] && [ -f starforge-ui.bin ] && UI_BIN="starforge-ui.bin"
-[ -n "$UI_BIN" ] || { echo "ERROR: missing UI image (hertzhunter-ui.bin or starforge-ui.bin)" >&2; exit 1; }
+[ -n "$UI_BIN" ] || { echo "ERROR: missing UI image (nuclearcounter-ui.bin, hertzhunter-ui.bin or starforge-ui.bin)" >&2; exit 1; }
 
 # --------------------------------------------------------------------- port
 PORT="${1:-}"
@@ -91,5 +94,7 @@ esptool --chip "$CHIP" --port "$PORT" --baud 921600 \
 
 echo ""
 echo "Done. The board boots NuclearCounter (ota_0) after a fresh flash."
-echo "Switch to StarForgeOS from the NuclearCounter menu (Advanced > StarForge),"
-echo "or back from the StarForgeOS menu (Boot Scanner Mode)."
+echo "V2.1 builds switch to StarForgeOS from the menu (Advanced > StarForge), and"
+echo "StarForgeOS switches back with 'Boot Scanner Mode'. The V3.0 INTEGRATED build"
+echo "has no menu switch (scanner + USB node + WiFi timer in one app); to boot the"
+echo "StarForgeOS slot set otadata with esptool or re-flash that slot."

@@ -193,18 +193,19 @@ pio run -e NuclearCounterV3_0 -t upload
 
 ### Building & flashing from CI (recommended)
 
-This repo has a GitHub Action (`.github/workflows/build.yml`) that builds **both** firmwares and packages a flash-ready artifact for each board, so you don't need a local toolchain or the StarForgeOS repo on hand:
+This repo has a GitHub Action (`.github/workflows/build.yml`) that builds the firmwares and packages a flash-ready artifact for each board, so you don't need a local toolchain or the StarForgeOS repo on hand:
 
 | Artifact | Board | Contents |
 |---|---|---|
 | `nuclearcounter-v2.1-c3` | ESP32-C3 (NuclearCounter V2.1) | NuclearCounter (ota_0) + StarForgeOS (ota_1) + web UI + bootloader + partitions + `flash.sh` |
+| `nuclearcounter-v3.0-c3` | ESP32-C3 (NuclearCounter V3.0, INTEGRATED) | same set, 4MB table (ota_1 @ 0x1A0000, UI @ 0x330000) |
 | `nuclearcounter-v3.0-s3` | ESP32-S3 (NuclearCounter V3.0) | same set, S3 offsets |
 
 **1. Run the action**
 
-Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)** → **Run workflow**. It builds both chips and uploads the two artifacts above. It also runs automatically on every push to `feat/dualboot` (or `main`) — a fresh artifact appears on each run's summary page.
+Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 C3 + v3.0 S3)** → **Run workflow**. It builds all three packages and uploads them. It also runs automatically on every push to `feat/dualboot` (or `main`) — a fresh artifact appears on each run's summary page.
 
-**Tag-based release:** pushing a tag that points at a commit on this branch creates a **GitHub release** named after the tag, with both packages attached as zip downloads (e.g. tag `DualBoot-1.0` → release `DualBoot-1.0` with `nuclearcounter-v2.1-c3-DualBoot-1.0.zip` and `nuclearcounter-v3.0-s3-DualBoot-1.0.zip`). Tags on other branches (like `master`) don't trigger it, because the workflow only exists on this branch.
+**Tag-based release:** pushing a tag that points at a commit on this branch creates a **GitHub release** named after the tag, with all three packages attached as zip downloads (e.g. tag `DualBoot-1.0` → release `DualBoot-1.0` with `nuclearcounter-v2.1-c3-DualBoot-1.0.zip`, `nuclearcounter-v3.0-c3-DualBoot-1.0.zip` and `nuclearcounter-v3.0-s3-DualBoot-1.0.zip`). Tags on other branches (like `master`) don't trigger it, because the workflow only exists on this branch.
 
 > [!NOTE]
 >
@@ -212,7 +213,7 @@ Go to the repo's **Actions** tab → select **Build firmware (v2.1 C3 + v3.0 S3)
 
 **2. Download the artifact for your board**
 
-On the run's summary page, download `nuclearcounter-v2.1-c3` (C3) or `nuclearcounter-v3.0-s3` (S3). Unzip it — you'll get the `.bin` files plus `flash.sh` and a `manifest.txt` (which records the chip and offsets).
+On the run's summary page, download the artifact for your board (`nuclearcounter-v2.1-c3`, `nuclearcounter-v3.0-c3` or `nuclearcounter-v3.0-s3`). Unzip it — you'll get the `.bin` files plus `flash.sh` and a `manifest.txt` (which records the chip and offsets).
 
 **3. Flash it**
 

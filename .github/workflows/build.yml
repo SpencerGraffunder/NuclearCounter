@@ -1,12 +1,14 @@
 # Builds BOTH firmwares and packages flash-ready artifacts:
 #
 #   nuclearcounter-v2.1-c3   ->  ESP32-C3 board (NuclearCounter V2.1)
+#   nuclearcounter-v3.0-c3   ->  ESP32-C3 board (NuclearCounter V3.0, INTEGRATED)
 #   nuclearcounter-v3.0-s3   ->  ESP32-S3 board (NuclearCounter V3.0)
 #
 # Each artifact is a complete dual-boot flash package:
 #   NuclearCounter -> ota_0 (0x10000)
-#   StarForgeOS   -> ota_1 (0x150000 on C3 / 0x1A0000 on S3)
-#   StarForgeOS web UI -> spiffs (0x290000 on C3 / 0x330000 on S3)
+#   StarForgeOS   -> ota_1 (0x150000 on the v2.1 C3 table / 0x1A0000 on the
+#                     4MB table used by the v3.0 packages)
+#   web UI        -> spiffs (0x290000 on the v2.1 C3 table / 0x330000 otherwise)
 #   + bootloader.bin + partitions.bin + flash.sh
 #
 # NuclearCounter (this repo) is the primary repo. StarForgeOS is checked out
@@ -21,7 +23,7 @@
 # (where this workflow file exists) builds both packages and creates a GitHub
 # release named after the tag, with the two zipped flash packages as assets.
 
-name: Build firmware (v2.1 C3 + v3.0 S3)
+name: Build firmware (v2.1 C3 + v3.0 C3 + v3.0 S3)
 
 on:
   workflow_dispatch:
@@ -97,14 +99,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install platformio esptool pyserial
 
-      - name: Build NuclearCounter — V2.1 (C3) + V3.0 (S3)
+      - name: Build NuclearCounter — V2.1 (C3) + V3.0 (C3 and S3)
         run: |
           pio run -e NuclearCounterV2_1
           pio run -e NuclearCounterV3_0
+          pio run -e NuclearCounterV3_0_C3
           # V3.0 INTEGRATED serves its web timer UI from the shared spiffs
           # partition (0x330000) — build the image (plain pio run does not
           # auto-build it in this setup).
           pio run -e NuclearCounterV3_0 -t buildfs
+          pio run -e NuclearCounterV3_0_C3 -t buildfs
 
       - name: Build StarForgeOS — C3 + S3 (firmware + SPIFFS UI)
         working-directory: starforgeos
@@ -114,11 +118,12 @@ jobs:
           pio run -e nuclearcounter   -t buildfs
           pio run -e nuclearcounter_s3 -t buildfs
 
-      - name: Package artifacts (v2.1 C3 + v3.0 S3)
+      - name: Package artifacts (v2.1 C3 + v3.0 C3 + v3.0 S3)
         run: |
           set -euo pipefail
 
           NC_C3=.pio/build/NuclearCounterV2_1
+          NC_V3_C3=.pio/build/NuclearCounterV3_0_C3
           NC_S3=.pio/build/NuclearCounterV3_0
           SF_C3=starforgeos/.pio/build/nuclearcounter
           SF_S3=starforgeos/.pio/build/nuclearcounter_s3
@@ -141,6 +146,24 @@ jobs:
           UI_OFF=0x290000
           EOF
 
+          # ============================ v3.0 (C3) ============================
+          # INTEGRATED build on the C3 board. Uses NuclearCounter's own 4MB table
+          # (ota_1 @ 0x1A0000, spiffs @ 0x330000), NOT the older v2.1 C3 table —
+          # flashing this package onto a v2.1 board replaces its partition table.
+          D=dist/v3.0-c3; rm -rf "$D"; mkdir -p "$D"
+          cp "$NC_V3_C3/partitions.bin" "$D/partitions.bin"
+          cp "$NC_V3_C3/bootloader.bin" "$D/bootloader.bin"
+          cp "$NC_V3_C3/firmware.bin"   "$D/nuclearcounter-ota0.bin"
+          cp "$SF_C3/firmware.bin"      "$D/starforge-ota1.bin"
+          [ -f "$NC_V3_C3/spiffs.bin" ] && cp "$NC_V3_C3/spiffs.bin" "$D/nuclearcounter-ui.bin"
+          check_ota1 "$D/partitions.bin" 0x1A0000 "v3.0-c3"
+          cp tools/flash.sh "$D/flash.sh"; chmod +x "$D/flash.sh"
+          cat > "$D/manifest.txt" <<'EOF'
+          CHIP=esp32c3
+          OTA1_OFF=0x1A0000
+          UI_OFF=0x330000
+          EOF
+
           # ============================ v3.0 (S3) ============================
           D=dist/v3.0-s3; rm -rf "$D"; mkdir -p "$D"
           cp "$NC_S3/partitions.bin"  "$D/partitions.bin"     # S3 table (ota_1 @ 0x1A0000)
@@ -151,7 +174,7 @@ jobs:
           # (the primary app on ota_0) serves its own web timer UI from it, so
           # package NC's spiffs image. Booting the SFOS slot shows the same
           # (rebranded-identical) UI.
-          [ -f "$NC_S3/spiffs.bin" ] && cp "$NC_S3/spiffs.bin" "$D/hertzhunter-ui.bin"
+          [ -f "$NC_S3/spiffs.bin" ] && cp "$NC_S3/spiffs.bin" "$D/nuclearcounter-ui.bin"
           check_ota1 "$D/partitions.bin" 0x1A0000 "v3.0-s3"
           cp tools/flash.sh "$D/flash.sh"; chmod +x "$D/flash.sh"
           cat > "$D/manifest.txt" <<'EOF'
@@ -161,6 +184,7 @@ jobs:
           EOF
 
           echo "=== v2.1-c3 ==="; ls -la dist/v2.1-c3
+          echo "=== v3.0-c3 ==="; ls -la dist/v3.0-c3
           echo "=== v3.0-s3 ==="; ls -la dist/v3.0-s3
 
       - name: Upload v2.1 (C3) artifact
@@ -168,6 +192,13 @@ jobs:
         with:
           name: nuclearcounter-v2.1-c3
           path: dist/v2.1-c3
+          if-no-files-found: error
+
+      - name: Upload v3.0 (C3) artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclearcounter-v3.0-c3
+          path: dist/v3.0-c3
           if-no-files-found: error
 
       - name: Upload v3.0 (S3) artifact
@@ -185,16 +216,19 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF#refs/tags/}"
           (cd dist && zip -qr "../nuclearcounter-v2.1-c3-${TAG}.zip" v2.1-c3)
+          (cd dist && zip -qr "../nuclearcounter-v3.0-c3-${TAG}.zip" v3.0-c3)
           (cd dist && zip -qr "../nuclearcounter-v3.0-s3-${TAG}.zip" v3.0-s3)
           if gh release view "$TAG" >/dev/null 2>&1; then
             # Re-run after an earlier partial success — replace the assets
             gh release upload --clobber "$TAG" \
               "nuclearcounter-v2.1-c3-${TAG}.zip" \
+              "nuclearcounter-v3.0-c3-${TAG}.zip" \
               "nuclearcounter-v3.0-s3-${TAG}.zip"
           else
             gh release create "$TAG" \
-              -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 S3)" \
-              -n "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the StarForgeOS web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
+              -t "Dual-boot firmware ${TAG} (v2.1 C3 + v3.0 C3 + v3.0 S3)" \
+              -n "Dual-boot flash packages. Each zip contains the bootloader, partition table, NuclearCounter (ota_0), StarForgeOS (ota_1), the NuclearCounter web UI (spiffs), and flash.sh (run it with the serial port as its argument)." \
               "nuclearcounter-v2.1-c3-${TAG}.zip" \
+              "nuclearcounter-v3.0-c3-${TAG}.zip" \
               "nuclearcounter-v3.0-s3-${TAG}.zip"
           fi
