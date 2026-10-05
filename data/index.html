@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Hertz Hunter Timer</title>
+    <title>NuclearCounter Timer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="/style.css?v=7">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>HERTZ HUNTER TIMER</h1>
+            <h1>NUCLEARCOUNTER TIMER</h1>
             <div class="status-container">
                 <div class="status">
                     <div class="status-dot" id="statusDot"></div>
@@ -61,6 +61,15 @@
                         <div style="display: flex; align-items: center; gap: 10px;">
                             <input type="range" id="exitRssiSlider" min="50" max="255" value="100" oninput="updateExitRssiVisual(this.value)" onchange="updateThresholdsServer()" style="flex: 1;">
                             <span id="exitRssiValue">100</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="config-row">
+                    <div class="config-item">
+                        <label for="minLapSlider">Min Lap Time (s, 0 = off):</label>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <input type="range" id="minLapSlider" min="0" max="60" value="0" onchange="updateMinLapValue(this.value); updateThresholdsServer()" style="flex: 1;">
+                            <span id="minLapValue">0</span>
                         </div>
                     </div>
                 </div>
@@ -215,9 +224,22 @@
                     exitSlider.value = Math.max(50, parseInt(enterSlider.value) - 20);
                     exitValue.textContent = exitSlider.value;
                 }
+                
+                // Load min lap time (seconds; 0 = disabled)
+                const minLap = data.min_lap !== undefined ? data.min_lap : 0;
+                const minLapSlider = document.getElementById('minLapSlider');
+                const minLapValue = document.getElementById('minLapValue');
+                if (minLapSlider && minLapValue) {
+                    minLapSlider.value = minLap;
+                    minLapValue.textContent = minLap;
+                }
             } catch (error) {
                 console.error('Error loading thresholds:', error);
             }
+        }
+        
+        function updateMinLapValue(value) {
+            document.getElementById('minLapValue').textContent = value;
         }
         
         // Call on page load
@@ -260,9 +282,10 @@
         }
         
         function updateThresholdsServer() {
-            // Update both thresholds on server
+            // Update both thresholds (+ min lap) on server
             const enterRssi = document.getElementById('enterRssiSlider').value;
             const exitRssi = document.getElementById('exitRssiSlider').value;
+            const minLap = document.getElementById('minLapSlider') ? document.getElementById('minLapSlider').value : 0;
             
             // Validate enter > exit
             if (parseInt(enterRssi) <= parseInt(exitRssi)) {
@@ -275,7 +298,7 @@
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
-                body: `enter_rssi=${enterRssi}&exit_rssi=${exitRssi}`
+                body: `enter_rssi=${enterRssi}&exit_rssi=${exitRssi}&min_lap=${minLap}`
             })
             .then(response => response.json())
             .then(data => {

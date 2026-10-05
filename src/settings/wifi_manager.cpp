@@ -21,9 +21,8 @@ bool WiFiManager::setupAP() {
         delay(100);  // Give WiFi stack time to clean up
     }
 
-    // Use the Hertz Hunter per-environment SSID/password (WIFI_SSID /
-    // WIFI_PASSWORD build flags from platformio.ini) rather than the
-    // MAC-suffixed open network from the original StarForge design.
+    // Use the per-environment SSID/password (WIFI_SSID / WIFI_PASSWORD
+    // build flags from platformio.ini).
     WiFi.mode(WIFI_AP);
     delay(50);  // Small delay to ensure mode change is processed
 

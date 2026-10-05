@@ -1,5 +1,5 @@
 /*
- * config.h — Hertz Hunter integrated firmware (SFOS-ported modules)
+ * config.h — NuclearCounter integrated firmware (ported timing modules)
  *
  * Slim single-board config for the NuclearCounter S3 INTEGRATED build.
  * Pin definitions come from the per-env build_flags in platformio.ini
@@ -38,7 +38,7 @@
 
 // ---- Web / mDNS ----
 #define WEB_SERVER_PORT     80
-#define MDNS_HOSTNAME       "hertzhunter"
+#define MDNS_HOSTNAME       "nuclearcounter"
 
 // ---- Feature switches (not present on this hardware) ----
 #define ENABLE_STATUS_LED       0

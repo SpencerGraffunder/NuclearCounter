@@ -53,9 +53,11 @@ public:
   void enterScan();
   void exitScan();
 
-  // WiFi timer page transitions. enterTimer() is instant when the AP was
-  // pre-initialized at boot; only the boot-failure fallback blocks for the
-  // full (slow) bring-up. Returns false if the AP failed to start.
+  // WiFi timer page transitions. The WiFi radio is ONLY on while the timer
+  // page is active: enterTimer() does the full (blocking, ~3-4s) AP + web
+  // bring-up — the menu shows the "Starting..." splash for that window;
+  // exitTimer() tears the radio fully down so the AP is not visible from
+  // the main menu / scanner. Returns false if the AP failed to start.
   bool enterTimer();
   void exitTimer();
 
@@ -83,6 +85,19 @@ public:
   // Persist band/channel/RSSI thresholds/min-lap to NVS (matches the web's
   // save-on-change).
   void saveTimingSettings() { _timingSettings.saveSettings(&_timing); }
+
+  // Channel control (timer page): read/write the VTX band + channel. Applying
+  // a new pair retunes the RX5808 immediately (the timing task never re-writes
+  // the frequency register on its own).
+  void getBandChannel(int &band, int &channel) const {
+    uint8_t b, c;
+    _timing.getRX5808Settings(b, c);
+    band = b;
+    channel = c;
+  }
+  void setBandChannel(int band, int channel) {
+    _timing.setRX5808Settings((uint8_t)band, (uint8_t)channel);
+  }
 
   // Countdown / GO state for the Time value box. The pre-start countdown and
   // "Go!" render in the elapsed-time value box instead of a separate status
@@ -119,6 +134,9 @@ public:
   // Called from the static timing lap callback (onTimingLap). Public because
   // that callback is a plain C function pointer, not a member/friend.
   void addLap(const LapData &lap);
+  // Same callback: keep the RotorHazard node's lap counter in step in every
+  // mode (see onTimingLap / NodeMode::onLap).
+  void nodeLap(const LapData &lap);
 
 private:
   // (Re)start the always-on node baseline. Idempotent.
@@ -137,7 +155,8 @@ private:
 
   IntMode _mode = IntMode::NODE;
   bool _timingBegun = false;
-  bool _webBegun = false;
+  bool _webBegun = false;  // one-time web init done (routes + SPIFFS)
+  bool _apUp = false;      // AP radio currently up (timer page active)
 
   // Race state shared with the web server (web start/stop-race semantics).
   // In NODE mode laps are consumed directly by the node protocol; in TIMER

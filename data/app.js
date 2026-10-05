@@ -795,7 +795,7 @@ class RaceTimer {
                 raceEndTime: this.raceData.endTime ? new Date(this.raceData.endTime).toISOString() : null,
                 raceDuration: this.raceData.startTime && this.raceData.endTime ?
                     this.raceData.endTime - this.raceData.startTime : null,
-                deviceName: 'Hertz Hunter Timer',
+                deviceName: 'NuclearCounter Timer',
                 enterThreshold: this.raceData.enterThreshold,
                 exitThreshold: this.raceData.exitThreshold,
                 frequency: this.raceData.frequency
@@ -816,7 +816,7 @@ class RaceTimer {
     }
 
     exportRaceDataCSV() {
-        let csv = 'Hertz Hunter Timer - Race Data Export\n';
+        let csv = 'NuclearCounter Timer - Race Data Export\n';
         csv += `Export Date,${new Date().toISOString()}\n`;
         csv += `Race Start,${this.raceData.startTime ? new Date(this.raceData.startTime).toISOString() : 'N/A'}\n`;
         csv += `Race End,${this.raceData.endTime ? new Date(this.raceData.endTime).toISOString() : 'N/A'}\n`;
@@ -892,7 +892,7 @@ class RaceTimer {
             const jsonUrl = URL.createObjectURL(jsonBlob);
             const jsonLink = document.createElement('a');
             jsonLink.href = jsonUrl;
-            jsonLink.download = `hertzhunter-race-${timestamp}.json`;
+            jsonLink.download = `nuclearcounter-race-${timestamp}.json`;
             jsonLink.click();
             URL.revokeObjectURL(jsonUrl);
         }
@@ -903,7 +903,7 @@ class RaceTimer {
             const csvUrl = URL.createObjectURL(csvBlob);
             const csvLink = document.createElement('a');
             csvLink.href = csvUrl;
-            csvLink.download = `hertzhunter-race-${timestamp}.csv`;
+            csvLink.download = `nuclearcounter-race-${timestamp}.csv`;
             csvLink.click();
             URL.revokeObjectURL(csvUrl);
         }

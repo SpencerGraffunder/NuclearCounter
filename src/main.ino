@@ -31,6 +31,21 @@ Api api(&settings, &module, &battery);
 #ifdef INTEGRATED
 // Integrated mode orchestrator (SFOS-ported timing / USB node / web stack)
 IntegratedMode integrated(&settings, &module, &buzzer);
+
+// ---- Rollback-safe OTA -----------------------------------------------------
+// The pre-built framework core AND bootloader are both compiled with
+// *_APP_ROLLBACK_ENABLE (see framework-arduinoespressif32-libs/<chip>/
+// sdkconfig): after an OTA, the new image boots in PENDING_VERIFY state and
+// the bootloader reverts to the previous slot on the NEXT boot unless the
+// app calls esp_ota_mark_app_valid_cancel_rollback() during this one.
+//
+// By default the core marks the image valid immediately in initArduino() —
+// BEFORE setup() — so a crash inside setup() would never roll back. Deferring
+// with verifyRollbackLater() (a weak hook the core consults at startup) and
+// confirming after OTA_VERIFY_DELAY_MS of stable uptime instead covers
+// crashes anywhere in boot, including setup() and the first seconds of loop().
+static const uint32_t OTA_VERIFY_DELAY_MS = 20000;
+bool verifyRollbackLater() { return true; }
 #endif
 
 // Create menu object
@@ -65,6 +80,18 @@ void setup() {
 }
 
 void loop() {
+#ifdef INTEGRATED
+  // Confirm a freshly-OTA'd image once it has stayed up long enough (see
+  // verifyRollbackLater above). No-op when the running image is already
+  // marked VALID (the normal case), so this runs at most one NVS write per
+  // boot, 20s in.
+  static bool otaConfirmed = false;
+  if (!otaConfirmed && (millis() >= OTA_VERIFY_DELAY_MS)) {
+    otaConfirmed = true;
+    esp_ota_mark_app_valid_cancel_rollback();
+  }
+#endif
+
   // Update battery voltage each loop
   battery.updateBatteryVoltage();
 

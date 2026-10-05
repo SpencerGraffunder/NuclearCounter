@@ -118,46 +118,12 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _raceStartTime = raceStartTime;
     _laps = laps;
 
-    // CRITICAL: Wait for WiFi to be fully ready before initializing web server
-    // ESPAsyncWebServer requires TCP/IP stack to be initialized
-    Serial.println("Waiting for WiFi TCP/IP stack to be ready...");
-    int wifiWaitCount = 0;
-    const int maxWait = 100; // 10 seconds max wait
-    
-    // For AP mode, wait for AP IP to be assigned (indicates TCP/IP stack is ready)
-    if (WiFi.getMode() & WIFI_AP) {
-        while (WiFi.softAPIP().toString() == "0.0.0.0" && wifiWaitCount < maxWait) {
-            delay(100);
-            wifiWaitCount++;
-        }
-        if (WiFi.softAPIP().toString() != "0.0.0.0") {
-            Serial.printf("WiFi AP ready: %s\n", WiFi.softAPIP().toString().c_str());
-        } else {
-            Serial.println("WARNING: WiFi AP IP not assigned after 10 seconds!");
-        }
-    } else {
-        // For STA mode, wait for connection
-        while (WiFi.status() != WL_CONNECTED && wifiWaitCount < maxWait) {
-            delay(100);
-            wifiWaitCount++;
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("WiFi STA ready: %s\n", WiFi.localIP().toString().c_str());
-        } else {
-            Serial.println("WARNING: WiFi STA not connected after 10 seconds!");
-        }
-    }
-    
-    // Additional small delay to ensure TCP/IP stack is fully initialized
-    delay(200);
-
-    // Initialize mDNS for .local hostname (after WiFi is ready)
-    if (MDNS.begin(MDNS_HOSTNAME)) {
-        Serial.printf("mDNS responder started: %s.local\n", MDNS_HOSTNAME);
-        MDNS.addService("http", "tcp", WEB_SERVER_PORT);
-    } else {
-        Serial.println("Warning: Error setting up mDNS responder (not critical)");
-    }
+    // One-time init only: SPIFFS + route registration. The IP wait, mDNS
+    // and the TCP listener itself live in start(), which runs on every AP
+    // bring-up (the AP is torn down on timer-page exit, so the listener
+    // must be re-bound each time).
+    // Route registration is pure in-memory handler-list work — it does not
+    // need the TCP/IP stack up; only _server.begin() (in start()) does.
 
     // Initialize SPIFFS for serving static files
     bool spiffsMounted = false;
@@ -235,6 +201,58 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) { handleAppJS(request); });
     _server.onNotFound([this](AsyncWebServerRequest* request) { handleNotFound(request); });
 
+    Serial.println("Web server routes registered (listener starts in start())");
+}
+
+// Per-AP-session bring-up: called on every timer-page entry, after the AP
+// is up.
+void WebServerManager::start() {
+    // CRITICAL: Wait for WiFi to be fully ready before initializing web server
+    // ESPAsyncWebServer requires TCP/IP stack to be initialized
+    Serial.println("Waiting for WiFi TCP/IP stack to be ready...");
+    int wifiWaitCount = 0;
+    const int maxWait = 100; // 10 seconds max wait
+    
+    // For AP mode, wait for AP IP to be assigned (indicates TCP/IP stack is ready)
+    if (WiFi.getMode() & WIFI_AP) {
+        while (WiFi.softAPIP().toString() == "0.0.0.0" && wifiWaitCount < maxWait) {
+            delay(100);
+            wifiWaitCount++;
+        }
+        if (WiFi.softAPIP().toString() != "0.0.0.0") {
+            Serial.printf("WiFi AP ready: %s\n", WiFi.softAPIP().toString().c_str());
+        } else {
+            Serial.println("WARNING: WiFi AP IP not assigned after 10 seconds!");
+        }
+    } else {
+        // For STA mode, wait for connection
+        while (WiFi.status() != WL_CONNECTED && wifiWaitCount < maxWait) {
+            delay(100);
+            wifiWaitCount++;
+        }
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.printf("WiFi STA ready: %s\n", WiFi.localIP().toString().c_str());
+        } else {
+            Serial.println("WARNING: WiFi STA not connected after 10 seconds!");
+        }
+    }
+    
+    // Additional small delay to ensure TCP/IP stack is fully initialized
+    delay(200);
+
+    // Initialize mDNS for .local hostname (after WiFi is ready). Re-called
+    // on every AP bring-up: MDNS.begin() returns false when the responder
+    // already exists (service already registered), so re-calling is safe.
+    if (MDNS.begin(MDNS_HOSTNAME)) {
+        Serial.printf("mDNS responder started: %s.local\n", MDNS_HOSTNAME);
+        MDNS.addService("http", "tcp", WEB_SERVER_PORT);
+    }
+
+    // CRITICAL: Additional delay to ensure TCP/IP task is fully ready
+    // The TCP/IP stack needs time to initialize its internal structures
+    Serial.println("Waiting for TCP/IP stack to be fully ready...");
+    delay(500);  // Give TCP/IP task time to initialize
+
     Serial.println("Starting web server...");
     
     // Verify WiFi is still ready before starting server
@@ -255,11 +273,16 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     // but AsyncTCP (which it uses) respects system TCP settings configured in platformio.ini
     
     Serial.println("Web server started (ESPAsyncWebServer)");
-    Serial.printf("Access point: WiFi AP\n");
     Serial.printf("IP address: %s\n", WiFi.softAPIP().toString().c_str());
     Serial.printf("mDNS hostname: %s.local\n", MDNS_HOSTNAME);
     Serial.printf("Server listening on port 80\n");
-    Serial.println("Open browser to http://192.168.8.1 or http://sfos.local");
+    Serial.println("Open browser to http://192.168.8.1 or http://nuclearcounter.local");
+}
+
+// Close the TCP listener. Routes survive — start() re-binds.
+void WebServerManager::stop() {
+    _server.end();
+    Serial.println("Web server stopped (TCP listener closed)");
 }
 
 
@@ -287,6 +310,8 @@ void WebServerManager::handleGetStatus(AsyncWebServerRequest* request) {
     uint16_t frequency = _timingCore ? _timingCore->getState().frequency_mhz : 5800;
     uint8_t enter_rssi = _timingCore ? _timingCore->getEnterRssi() : 120;
     uint8_t exit_rssi = _timingCore ? _timingCore->getExitRssi() : 100;
+    // Min lap time in whole seconds (0 = disabled); the engine stores ms.
+    uint32_t min_lap = _timingCore ? (_timingCore->getMinLapMs() / 1000) : 0;
     bool crossing = _timingCore ? _timingCore->isCrossing() : false;
     size_t lapCount = _laps ? _laps->size() : 0;
     uint32_t uptime = millis();
@@ -294,9 +319,9 @@ void WebServerManager::handleGetStatus(AsyncWebServerRequest* request) {
     // Build JSON using snprintf (bounds-checked, efficient)
     int len = snprintf(jsonBuffer, JSON_STATUS_BUFFER_SIZE,
         "{\"status\":\"%s\",\"lap_count\":%zu,\"uptime\":%lu,\"rssi\":%u,\"frequency\":%u,"
-        "\"enter_rssi\":%u,\"exit_rssi\":%u,\"threshold\":%u,\"crossing\":%s",
+        "\"enter_rssi\":%u,\"exit_rssi\":%u,\"threshold\":%u,\"min_lap\":%lu,\"crossing\":%s",
         (*_raceActive ? "racing" : "ready"), lapCount, uptime, current_rssi, frequency,
-        enter_rssi, exit_rssi, enter_rssi, crossing ? "true" : "false");
+        enter_rssi, exit_rssi, enter_rssi, (unsigned long)min_lap, crossing ? "true" : "false");
 
 #if ENABLE_BATTERY_MONITOR && defined(BATTERY_ADC_PIN)
     // Add battery status if available
@@ -502,6 +527,19 @@ void WebServerManager::handleSetFrequency(AsyncWebServerRequest* request) {
     }
 }
 
+// Optional min_lap (whole seconds, 0-60, 0 = disabled) applied whenever it is
+// present, on any branch — the web sends it alongside the RSSI thresholds so
+// one save covers the whole settings row (matches the OLED's save-on-commit).
+static void applyMinLapIfPresent(AsyncWebServerRequest* request, TimingCore* core) {
+    if (request->hasParam("min_lap", true) && core) {
+        int min_lap = request->getParam("min_lap", true)->value().toInt();
+        if (min_lap >= 0 && min_lap <= 60) {
+            core->setMinLapMs((uint32_t)min_lap * 1000);
+            Serial.printf("Min lap set to: %d s\n", min_lap);
+        }
+    }
+}
+
 void WebServerManager::handleSetThreshold(AsyncWebServerRequest* request) {
     static char response[128];
     
@@ -512,6 +550,7 @@ void WebServerManager::handleSetThreshold(AsyncWebServerRequest* request) {
             if (_timingCore) {
                 _timingCore->setEnterRssi(enter_rssi);
                 _timingCore->setExitRssi(exit_rssi);
+                applyMinLapIfPresent(request, _timingCore);
                 if (_settingsManager) {
                     _settingsManager->saveSettings(_timingCore);
                 }
@@ -532,6 +571,7 @@ void WebServerManager::handleSetThreshold(AsyncWebServerRequest* request) {
             if (_timingCore) {
                 _timingCore->setEnterRssi(enter);
                 _timingCore->setExitRssi(exit);
+                applyMinLapIfPresent(request, _timingCore);
                 if (_settingsManager) {
                     _settingsManager->saveSettings(_timingCore);
                 }
@@ -541,6 +581,17 @@ void WebServerManager::handleSetThreshold(AsyncWebServerRequest* request) {
             Serial.printf("Threshold set to: %d (migrated to Enter=%d, Exit=%d, saved)\n", threshold, enter, exit);
         } else {
             request->send(400, "application/json", "{\"error\":\"invalid_threshold\"}");
+        }
+    } else if (request->hasParam("min_lap", true)) {
+        // Min lap can also be set on its own.
+        if (_timingCore) {
+            applyMinLapIfPresent(request, _timingCore);
+            if (_settingsManager) {
+                _settingsManager->saveSettings(_timingCore);
+            }
+            request->send(200, "application/json", "{\"status\":\"min_lap_set\"}");
+        } else {
+            request->send(500, "application/json", "{\"error\":\"no_timing_core\"}");
         }
     } else {
         request->send(400, "application/json", "{\"error\":\"missing_threshold\"}");

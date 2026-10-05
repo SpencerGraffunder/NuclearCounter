@@ -47,7 +47,7 @@ private:
 
 // Manages WiFi updates of the board:
 //
-//  1. APP SLOTS (dual-boot)
+//  1. APP SLOTS (dual-boot, rollback-safe)
 //     - Only the INACTIVE slot can be updated. The running app can never be
 //       overwritten: erasing a slot the CPU is executing from would crash it.
 //     - Uploads are streamed in chunks straight into the partition
@@ -58,6 +58,17 @@ private:
 //       A failed/partial upload leaves an invalid image in the inactive
 //       slot, which the board never boots (and the ROM bootloader would
 //       fall back to the other slot if it ever were selected).
+//     - ROLLBACK (S3 INTEGRATED build): the framework bootloader and core
+//       are built with *_APP_ROLLBACK_ENABLE. "boot" therefore starts the
+//       new image in PENDING_VERIFY state; it sticks only if it survives
+//       OTA_VERIFY_DELAY_MS (main.ino) and marks itself valid. A
+//       crash-looping image is reverted to the previous slot on the next
+//       boot — a bad OTA can no longer brick the board.
+//     - TRADE-OFF: the second slot (ota_1) is NC's rollback slot, NOT
+//       StarForgeOS. The first NC OTA overwrites whatever is in ota_1.
+//       SFOS can still be flashed there manually with esptool (see
+//       flash_dualboot.sh / DUALBOOT.md), but dual-booting to it via
+//       otadata is gone while an NC image occupies ota_1.
 //
 //  2. DATA PARTITION (SPIFFS, the web UI files)
 //     - File-level upload / delete on the mounted filesystem.

@@ -3,6 +3,7 @@
 #include "integrated.h"
 #include "about.h"
 #include <WiFi.h>
+#include <esp_ota_ops.h>
 
 // Firmware info strings reported over the RotorHazard protocol
 // (READ_FIRMWARE_INFO) — externs declared in node_mode.cpp.
@@ -15,11 +16,18 @@ const char *firmwareProcTypeString = "ESP32";
 // global handle to reach the single IntegratedMode instance.
 static IntegratedMode *s_self = nullptr;
 
-// TIMER mode only: feed the web UI's lap vector. In NODE mode the node
-// protocol consumes laps directly from the timing core's lap queue.
+// Lap callback (fires from the timing task on every crossing, in any mode
+// where the engine is activated). Feeds the web/OLED lap vector (addLap)
+// AND the RotorHazard node's lap counter (nodeLap). The node counter MUST be
+// updated here rather than by draining the timing-core ring in NodeMode:
+// the ring is only consumed while the node protocol is running, so laps
+// recorded while the timer/scanner page was open used to sit in the 50-slot
+// ring until the user returned — and >50 of them overflowed the ring and
+// froze the node's lap counter for RotorHazard.
 static void onTimingLap(const LapData &lap) {
   if (s_self) {
     s_self->addLap(lap);
+    s_self->nodeLap(lap);
   }
 }
 
@@ -29,23 +37,21 @@ IntegratedMode::IntegratedMode(Settings *settings, RX5808 *rx, Buzzer *buzzer)
 }
 
 void IntegratedMode::begin() {
-  Serial.println(F("Hertz Hunter integrated firmware (USB node always on, scanner + WiFi timer pages)"));
+  Serial.println(F("NuclearCounter integrated firmware (USB node always on, scanner + WiFi timer pages)"));
 
-  // Pre-initialize the WiFi AP + web server BEFORE the timing task starts:
-  //  - SFOS ordering: the high-priority timing task must not be running while
-  //    the WiFi driver initialises (it starves the init)
-  //  - the AP is then never reconfigured for the whole boot session, which
-  //    sidesteps the S3 ieee80211_hostap_attach crash on AP restart
-  //  - the WiFi Timer page is instant to open afterwards, and the network is
-  //    always available (web timer keeps running in any mode; a client can
-  //    reconnect and catch up)
-  if (_wifi.setupAP()) {
-    _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
-    _webBegun = true;
-  } else {
-    Serial.println(F("WiFi AP failed to start at boot - will retry when the timer page is first opened"));
-  }
+  // Log which slot we booted from + its verify state. After an OTA the new
+  // slot shows state=1 (PENDING_VERIFY) until main.ino confirms it 20s in;
+  // if the app crash-loops instead, the next boot reverts to the previous
+  // slot (rollback-safe OTA — see main.ino).
+  const esp_partition_t *runPart = esp_ota_get_running_partition();
+  esp_ota_img_states_t imgState = ESP_OTA_IMG_UNDEFINED;
+  esp_ota_get_state_partition(runPart, &imgState);
+  Serial.printf("Boot slot: %s (image state: %d, 0=valid 1=pending verify)\n",
+                runPart ? runPart->label : "?", (int)imgState);
 
+  // No WiFi at boot: the AP only comes up while the WiFi Timer page is
+  // active (enterTimer/exitTimer). Skipping the boot-time AP also keeps
+  // RotorHazard node detection fast (the node is ready ~2 s after reset).
   startNode();
 }
 
@@ -107,9 +113,9 @@ void IntegratedMode::exitScan() {
   Serial.println(F("Node resumed after scanner page"));
 }
 
-// WiFi timer page entry. Normally instant (AP + web were pre-initialized at
-// boot); only the boot-failure fallback does the slow full bring-up while
-// the menu splash is visible.
+// WiFi timer page entry: full AP + web bring-up (blocking, ~3-4s — the
+// menu shows the "Starting..." splash for exactly this window). The radio
+// is fully torn down on exit, so every entry re-runs the whole sequence.
 bool IntegratedMode::enterTimer() {
   if (_mode == IntMode::TIMER) {
     return true;  // already up (re-press guard)
@@ -118,16 +124,21 @@ bool IntegratedMode::enterTimer() {
     _rx->stopScan();
     delay(5);  // let the scan task finish any in-flight bit-bang
   }
-  if (!_webBegun) {
-    // AP didn't come up at boot — full (slow) bring-up now.
+  if (!_apUp) {
     Serial.println(F("Starting WiFi timer..."));
     if (!_wifi.setupAP()) {
       Serial.println(F("WiFi AP failed to start"));
       startNode();
       return false;
     }
-    _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
-    _webBegun = true;
+    if (!_webBegun) {
+      // One-time: register routes + mount SPIFFS (both survive AP
+      // down/up cycles; only the TCP listener needs re-binding)
+      _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
+      _webBegun = true;
+    }
+    _web.start();  // wait for IP, mDNS, TCP listener
+    _apUp = true;
   }
   _timing.setActivated(true);
   // Defensive re-tune: if the scanner had driven the RF pins, the hardware
@@ -138,16 +149,27 @@ bool IntegratedMode::enterTimer() {
   return true;
 }
 
-// WiFi timer page exit: the WiFi stack STAYS UP (tearing the AP down to
-// re-create it is the path that crashes the S3, and the web timer is meant
-// to keep running in the background — a client can reconnect and catch up).
-// Only the node serial protocol resumes.
+// WiFi timer page exit: tear the WiFi stack down completely so the AP
+// disappears (the radio is only supposed to be on while the timer page is
+// active). Teardown ORDER matters on the S3: softAPdisconnect(true) deletes
+// the AP interface and WiFi.mode(WIFI_OFF) releases the driver — re-arming
+// WiFi.mode(WIFI_AP) while a live AP instance still exists crashes in
+// ieee80211_hostap_attach (observed 2026-10-02). Stop the TCP listener
+// first so no handler runs while the stack unwinds.
 void IntegratedMode::exitTimer() {
   if (_mode != IntMode::TIMER) {
     return;
   }
+  if (_apUp) {
+    _web.stop();
+    WiFi.softAPdisconnect(true);
+    delay(100);  // give the WiFi stack time to clean up
+    WiFi.mode(WIFI_OFF);
+    _apUp = false;
+    Serial.println(F("WiFi AP down"));
+  }
   startNode();
-  Serial.println(F("Node resumed (WiFi timer stays up in the background)"));
+  Serial.println(F("Node resumed (WiFi off)"));
 }
 
 bool IntegratedMode::pauseForCalibration() {
@@ -230,6 +252,10 @@ void IntegratedMode::addLap(const LapData &lap) {
       _buzzer->buzz();
     }
   }
+}
+
+void IntegratedMode::nodeLap(const LapData &lap) {
+  _node.onLap(lap);
 }
 
 // SELECT on the WiFi timer page: idle -> start (countdown), countdown ->

@@ -32,6 +32,12 @@ public:
     void begin(TimingCore* timingCore);
     void process();
     void handleSerialInput();
+    // Lap crossing forwarded by IntegratedMode from the timing-core lap
+    // callback. The node's _lastPass is updated here (NOT by draining the
+    // timing-core ring in process()) so the RotorHazard lap counter stays in
+    // step even while the node protocol is paused (timer/scanner pages open).
+    // See onTimingLap in integrated.cpp for the root cause.
+    void onLap(const LapData &lap);
     
     friend struct Message;  // Allow Message to access private members
 

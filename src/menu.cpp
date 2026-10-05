@@ -12,7 +12,8 @@ const T& clamp(const T& value, const T& low, const T& high) {
 // Timer-page control block element indices (defined early: handleButtons
 // needs TP_CTRL_START before the drawing code below defines the layout).
 #ifdef INTEGRATED
-static const int TP_CTRL_RSSI = 0, TP_CTRL_MINLAP = 1, TP_CTRL_START = 2;
+static const int TP_CTRL_RSSI = 0, TP_CTRL_MINLAP = 1, TP_CTRL_CHANNEL = 2,
+                 TP_CTRL_START = 3;
 #endif
 
 Menu::Menu(uint8_t p_p, uint8_t s_p, uint8_t n_p, Settings *s, Buzzer *b, RX5808 *r, Api *a)
@@ -104,11 +105,12 @@ void Menu::handleButtons() {
 #ifdef INTEGRATED
     if (menuIndex == WIFI) {
       // Timer page: PREV/NEXT drive the control block — move the cursor
-      // between the three controls, or inc/dec the value by 2 while editing.
+      // between the four controls, or change the value while editing
+      // (RSSI / min lap step by 2, band / channel step by 1).
       if (_timerCtrlEditing) {
         timerCtrlAdjust(direction);
       } else {
-        _timerCtrlCursor = (_timerCtrlCursor + direction + 3) % 3;
+        _timerCtrlCursor = (_timerCtrlCursor + direction + 4) % 4;
       }
     } else
 #endif
@@ -189,9 +191,8 @@ void Menu::handleButtons() {
             integrated->enterScan();
             menuIndex = SCAN;
             break;
-          case 1:  // WiFi Timer page: normally instant (AP pre-initialized at
-            // boot); the splash only matters on the boot-failure fallback
-            // where the slow bring-up runs while it is on screen
+          case 1:  // WiFi Timer page: full AP + web bring-up happens inside
+            // enterTimer() (blocking, ~3-4s); the splash covers that window
             menuIndex = WIFI;
             _timerCtrlCursor = 0;     // start the cursor on the Cross RSSI control
             _timerCtrlEditing = false;
@@ -554,18 +555,14 @@ void Menu::drawScanMenu() {
 
 // Draw static content on about menu
 void Menu::drawAboutMenu() {
-  // 5 lines, sized to fit 128x64 (the two credit lines are 30/26 chars, so
-  // they need the small 4x6 font to fit on one line each).
+  // 3 lines, vertically centered (credit lines removed — NuclearCounter
+  // branding only).
   u8g2.setFont(u8g2_font_7x13B_tf);
-  u8g2.drawStr(xTextCentre(APP_NAME, 7), 13, APP_NAME);
+  u8g2.drawStr(xTextCentre(APP_NAME, 7), 20, APP_NAME);
 
   u8g2.setFont(u8g2_font_5x7_tf);
-  u8g2.drawStr(xTextCentre(APP_BY, 5), 25, APP_BY);
-  u8g2.drawStr(xTextCentre(VERSION, 5), 37, VERSION);
-
-  u8g2.setFont(u8g2_font_4x6_tf);
-  u8g2.drawStr(xTextCentre(CREDIT_1, 4), 50, CREDIT_1);
-  u8g2.drawStr(xTextCentre(CREDIT_2, 4), 61, CREDIT_2);
+  u8g2.drawStr(xTextCentre(APP_BY, 5), 36, APP_BY);
+  u8g2.drawStr(xTextCentre(VERSION, 5), 50, VERSION);
 }
 
 #ifdef INTEGRATED
@@ -588,16 +585,20 @@ static const int TP_LX = 4, TP_LVX = 54, TP_RCX = 60, TP_RX = 120;
 // 7. The control block still fits: its highlight box ends at row 58 < 64.
 static const int TP_ROW0_Y = 7, TP_ROW1_Y = 17, TP_ROW2_Y = 27, TP_ROW3_Y = 37;
 static const int TP_CTRL_LABEL_Y = 47, TP_CTRL_VALUE_Y = 57;
-// Control block: three equal elements, each DISPLAY_WIDTH/3 px wide (user
-// spec), with label + value text centered inside the element and the
-// selection highlight spanning the whole element. Integer division leaves 2px
-// uncovered on the right (128 = 42*3 + 2).
-// NOTE: the third element's box (cols 84-125) deliberately reaches into the
-// old 6px right black-guard zone (cols 122-127, see Menu::begin) — the same
-// trade-off the main menu's full-width highlight makes. If this panel's glass
-// defect bleeds at the box's right edge, cap the box width there rather than
-// reintroducing per-element widths.
-static const int TP_COL_W = DISPLAY_WIDTH / 3;  // 42px per control element
+// Control block: four elements (RSSI / Min Lap / Chan / Start), each sized
+// to the widest of its label/value + 2px margin (5x7 is monospace, 5px/char):
+// "145/205" and "Min Lap" need 35px -> 37px columns; "Chan"/"Start"/"Race"
+// fit in 22px. Total = 37+37+22+22 = 118 + 3 gaps of 3px + 2px right margin
+// = 128 (exactly the panel width). Label + value text is centered inside the
+// element; the selection highlight spans the whole element.
+// NOTE: col3's box (cols 104-125) deliberately reaches into the 6px right
+// black-guard zone (cols 122-127, see Menu::begin) — same trade-off the main
+// menu's full-width highlight makes. If this panel's glass defect bleeds at
+// the box's right edge, cap that box's width instead of the others.
+static const int TP_X0 = 0, TP_W0 = 37;   // Cross RSSI  ("RSSI" / "145/205")
+static const int TP_X1 = 40, TP_W1 = 37;  // Min Lap    ("Min Lap" / "60s")
+static const int TP_X2 = 80, TP_W2 = 22;  // Channel    ("Chan" / "R5")
+static const int TP_X3 = 104, TP_W3 = 22; // Start      ("Start" / "Race")
 
 // 2-decimal lap value ("12.34"), no trailing "s".
 static void tpFmtLapMs(uint32_t ms, char *buf, size_t n) {
@@ -657,17 +658,17 @@ static int tpDrawSeg(U8G2 *u, const char *str, int start, int len, int x, int y,
 //   2 = editing (only the numeric part of the value is highlighted). For
 //       state 2, hlStart/hlLen identify which chars of `value` make up the
 //       number (e.g. the "10" of "10s").
-static void tpDrawControl(U8G2 *u, int colX, const char *label, const char *value,
-                          int state, int hlStart, int hlLen) {
-  int labelX = colX + (TP_COL_W - u->getStrWidth(label)) / 2;
-  int valueX = colX + (TP_COL_W - u->getStrWidth(value)) / 2;
+static void tpDrawControl(U8G2 *u, int colX, int colW, const char *label,
+                          const char *value, int state, int hlStart, int hlLen) {
+  int labelX = colX + (colW - u->getStrWidth(label)) / 2;
+  int valueX = colX + (colW - u->getStrWidth(value)) / 2;
   if (state == 1) {
     // Full-width box from 1px above the label's glyph top to 2px below the
     // value's glyph bottom. See the 5x7-ascent GOTCHA on tpDrawSeg: baselines
     // are 6px below each glyph top.
     int boxTop = TP_CTRL_LABEL_Y - 7;
     int boxBottom = TP_CTRL_VALUE_Y + 2;
-    u->drawBox(colX, boxTop, TP_COL_W, boxBottom - boxTop);
+    u->drawBox(colX, boxTop, colW, boxBottom - boxTop);
     u->setDrawColor(0);
     u->drawStr(labelX, TP_CTRL_LABEL_Y, label);
     u->drawStr(valueX, TP_CTRL_VALUE_Y, value);
@@ -691,8 +692,8 @@ static void tpDrawControl(U8G2 *u, int colX, const char *label, const char *valu
 //   Last   --.--        Best   --.--
 //   Laps   ---          Best 3 --.--
 //   Time   --:--/Start  RSSI   62
-//   [  RSSI  ][ Min Lap ][  Start  ]   (3 equal elements, each screen/3 wide)
-//   [ 145/205 ][   10s   ][  Race   ]   (label + value centered in each)
+//   [  RSSI  ][ Min Lap ][Chan][Start]   (4 elements, widths per element)
+//   [145/205 ][  10s    ][ R5 ][Race ]   (label + value centered in each)
 void Menu::drawTimerMenu() {
   u8g2.setFont(u8g2_font_5x7_tf);
   char v[16];
@@ -753,12 +754,14 @@ void Menu::drawTimerMenu() {
   snprintf(v, sizeof(v), "%d", (int)shownRssi);
   u8g2.drawStr(TP_RX - u8g2.getStrWidth(v), TP_ROW3_Y, v);
 
-  // ---- Control block: Cross RSSI | Min Lap | Start ----
+  // ---- Control block: Cross RSSI | Min Lap | Chan | Start ----
   // Which element is highlighted, and how (1 = both lines, 2 = numeric only).
-  int rssiState = 0, minLapState = 0, startState = 0, hlStart = 0, hlLen = 0;
+  int rssiState = 0, minLapState = 0, chanState = 0, startState = 0;
+  int hlStart = 0, hlLen = 0;
   if (!_timerCtrlEditing) {
     if (_timerCtrlCursor == TP_CTRL_RSSI) rssiState = 1;
     else if (_timerCtrlCursor == TP_CTRL_MINLAP) minLapState = 1;
+    else if (_timerCtrlCursor == TP_CTRL_CHANNEL) chanState = 1;
     else startState = 1;
   } else if (_timerCtrlCursor == TP_CTRL_RSSI) {
     char enter[4], exitv[4];
@@ -776,36 +779,52 @@ void Menu::drawTimerMenu() {
     snprintf(sec, sizeof(sec), "%d", integrated->getMinLapSeconds());
     minLapState = 2;
     hlStart = 0; hlLen = (int)strlen(sec);          // highlight the number (not "s")
+  } else if (_timerCtrlCursor == TP_CTRL_CHANNEL) {
+    chanState = 2;
+    hlStart = _timerCtrlEditField;  // 0 = band letter, 1 = channel digit
+    hlLen = 1;
   }
 
   char crossVal[12];
   snprintf(crossVal, sizeof(crossVal), "%d/%d", integrated->getEnterRSSI(),
            integrated->getExitRSSI());
-  tpDrawControl(&u8g2, 0, "RSSI", crossVal, rssiState, hlStart, hlLen);
+  tpDrawControl(&u8g2, TP_X0, TP_W0, "RSSI", crossVal, rssiState, hlStart, hlLen);
 
   char minVal[6];
   snprintf(minVal, sizeof(minVal), "%ds", integrated->getMinLapSeconds());
-  tpDrawControl(&u8g2, TP_COL_W, "Min Lap", minVal, minLapState, hlStart, hlLen);
+  tpDrawControl(&u8g2, TP_X1, TP_W1, "Min Lap", minVal, minLapState, hlStart, hlLen);
+
+  // Channel value "R5" = band letter + channel number (1-8). Band letters are
+  // the freqTable rows (A/B/E/F/R/L) — the same table the web UI exposes.
+  int band, channel;
+  integrated->getBandChannel(band, channel);
+  static const char BAND_LETTERS[6] = {'A', 'B', 'E', 'F', 'R', 'L'};
+  char chanVal[4];
+  snprintf(chanVal, sizeof(chanVal), "%c%d", BAND_LETTERS[band < 6 ? band : 0],
+           channel + 1);
+  tpDrawControl(&u8g2, TP_X2, TP_W2, "Chan", chanVal, chanState, hlStart, hlLen);
 
   const char *startVal = integrated->raceActive() ? "Stop" : "Race";
-  tpDrawControl(&u8g2, 2 * TP_COL_W, "Start", startVal, startState, 0, 0);
+  tpDrawControl(&u8g2, TP_X3, TP_W3, "Start", startVal, startState, 0, 0);
 }
 
 // ENTER on the timer page: act on the currently selected control.
 //   Cross RSSI: enter -> begin editing the enter value; enter -> switch to the
 //               exit value; enter -> commit + exit edit.
 //   Min Lap:    enter -> toggle edit (second enter commits + exits).
+//   Channel:    same 2-stage as Cross RSSI, editing band first, then channel.
 //   Start:      enter -> start/stop the race (its own beeps/countdown).
 // On commit the timing settings are persisted to NVS (matching the web UI).
 void Menu::timerCtrlSelect() {
   bool commit = false;
   switch (_timerCtrlCursor) {
     case TP_CTRL_RSSI:
+    case TP_CTRL_CHANNEL:
       if (!_timerCtrlEditing) {
         _timerCtrlEditing = true;
-        _timerCtrlEditField = 0;
+        _timerCtrlEditField = 0;  // RSSI: enter value; Channel: band
       } else if (_timerCtrlEditField == 0) {
-        _timerCtrlEditField = 1;
+        _timerCtrlEditField = 1;  // RSSI: exit value; Channel: channel
       } else {
         _timerCtrlEditing = false;
         commit = true;
@@ -828,7 +847,8 @@ void Menu::timerCtrlSelect() {
   // come from IntegratedMode::oledSelectTimer, not here.
 }
 
-// PREV/NEXT while editing a control: inc (next) / dec (prev) the value by 2.
+// PREV/NEXT while editing a control: inc (next) / dec (prev) the value.
+// Cross RSSI and min lap step by 2; band/channel step by 1 (small domains).
 // Cross RSSI keeps the enter > exit invariant; min lap is clamped 0..60 s.
 void Menu::timerCtrlAdjust(int direction) {
   int step = 2 * direction;
@@ -854,6 +874,27 @@ void Menu::timerCtrlAdjust(int direction) {
     if (sec < 0) sec = 0;
     if (sec > 60) sec = 60;
     integrated->setMinLapSeconds(sec);
+  } else if (_timerCtrlCursor == TP_CTRL_CHANNEL) {
+    // Step by 1 with wrap. Only the bands whose frequencies fall inside
+    // MIN_FREQ..MAX_FREQ (5645-5945) are offered — the same four the web UI
+    // exposes (A, E, F, R = freqTable rows 0, 2, 3, 4). Row 1 (Boscam B) and
+    // 5 (low band) are omitted: low-band frequencies are rejected by
+    // setRX5808Frequency's range check, so they would tune nowhere.
+    static const int BANDS[4] = {0, 2, 3, 4};
+    int band, channel;
+    integrated->getBandChannel(band, channel);
+    if (_timerCtrlEditField == 0) {
+      int idx = -1;
+      for (int i = 0; i < 4; i++) {
+        if (BANDS[i] == band) idx = i;
+      }
+      band = BANDS[(idx + direction + 4) % 4];
+    } else {
+      channel += direction;
+      if (channel < 0) channel = 7;
+      if (channel > 7) channel = 0;
+    }
+    integrated->setBandChannel(band, channel);
   }
 }
 

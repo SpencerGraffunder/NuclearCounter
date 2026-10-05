@@ -253,15 +253,23 @@ void NodeMode::process() {
 
     // Handle incoming serial data
     handleSerialInput();
-    
-    // Check for new lap data from timing core
-    if (_timingCore && _timingCore->hasNewLap()) {
-        LapData lap = _timingCore->getNextLap();
-        // Convert to RotorHazard format and update internal state
-        _lastPass.timestamp = lap.timestamp_ms;
-        _lastPass.rssiPeak = lap.rssi_peak;
-        _lastPass.lap++;  // Increment lap counter
-    }
+
+    // NOTE: laps are no longer drained from the timing-core ring here.
+    // IntegratedMode forwards every crossing to onLap() from the lap callback
+    // in ALL modes, so _lastPass stays current even while the node protocol
+    // is paused (timer page / scanner open). Draining only in this method
+    // let the 50-slot ring overflow (>50 laps while a page was open) — the
+    // write index then wraps onto the stalled read index, hasNewLap() reads
+    // false, and the node's lap counter silently freezes for RotorHazard.
+}
+
+void NodeMode::onLap(const LapData &lap) {
+    // Called from the timing task (core 1) via the lap callback. Fields are
+    // small aligned PODs read by the serial path on core 0, so no lock is
+    // needed (same exposure as IntegratedMode::addLap's _laps updates).
+    _lastPass.timestamp = lap.timestamp_ms;
+    _lastPass.rssiPeak = lap.rssi_peak;
+    _lastPass.lap++;  // Increment lap counter
 }
 
 void NodeMode::handleSerialInput() {

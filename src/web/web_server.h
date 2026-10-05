@@ -19,8 +19,19 @@ public:
 
     // Initialize web server with routes and start listening
     // Must be called after WiFi AP is up
+    // One-time init: save state pointers, mount SPIFFS, register routes.
+    // Does NOT start the TCP listener or touch mDNS.
     void begin(TimingCore* timingCore, SettingsManager* settingsManager,
                bool* raceActive, uint32_t* raceStartTime, std::vector<LapData>* laps);
+
+    // Per-AP-session: wait for the AP IP, (re)start mDNS, start the TCP
+    // listener. Called on every timer-page entry (the AP is torn down on
+    // exit, so the listener must be re-bound each time — AsyncServer
+    // begin/end are re-entrant).
+    void start();
+
+    // Close the TCP listener (routes survive; re-bind via start()).
+    void stop();
 
 #if ENABLE_BATTERY_MONITOR && defined(BATTERY_ADC_PIN)
     // Update battery status (called from StandaloneMode polling loop)
