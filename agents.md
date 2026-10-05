@@ -59,6 +59,17 @@ and point at the code.
 - **`esp_wifi_set_max_tx_power()` is in 0.25 dBm units, range [8, 84]** = 2–20 dBm.
   The inherited `20` was 5 dBm, which is why the AP beacon was invisible to some
   clients. See `src/settings/wifi_manager.cpp`.
+- **Mode-transition "10 second" lag was Serial logging, not WiFi.** On the USB-CDC
+  boards a Serial write blocks up to `SERIAL_TX_TIMEOUT_MS` (20 ms) **per character**
+  when the host has the port open but is not draining it (Arduino's
+  `Print::write(buffer,size)` loops per byte). Measured on the C3 with the board
+  plugged into an idle Mac, before/after moving the bring-up chatter behind
+  `VPRINT` (compiled out of production, `src/config/config.h`):
+  timer **enter 11.5 s → 0.66 s**, **exit 5.8 s → 0.59 s**. Same radio, same code path.
+  The old `start()` also capped its AP-IP wait at 10 s and printed its way through it.
+  Diagnose this class of bug with `[env:TRACE_C3]` (bench-only): it records stage times
+  in RAM (`TTRACE`, `src/timer_trace.cpp`) and serves them from `/api/timerstats`, so the
+  measurement never depends on printing.
 - **`data/app.js` polls `/api/status` every 400 ms.** Measured on the single-core C3
   (repeated 60 s windows, `/api/jitter` bench endpoint): the 1 ms-interval sampling
   task (`TIMING_INTERVAL_MS`, target 1000 samples/s) holds ~996 samples/s with the AP

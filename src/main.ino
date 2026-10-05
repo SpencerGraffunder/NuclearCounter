@@ -80,7 +80,13 @@ void setup() {
 // (the old default was 250 ms, which starved the main loop ~10x whenever the host
 // had the port open but was not draining it) while still flushing normally.
 #ifndef SERIAL_TX_TIMEOUT_MS
+#ifdef TRACE_SERIAL_NOBLOCK
+// Bench-only (JITTER_C3): when measuring how long a stage takes, a 20 ms bounded
+// stall per trace line would itself distort the measurement.
+#define SERIAL_TX_TIMEOUT_MS 0
+#else
 #define SERIAL_TX_TIMEOUT_MS 20
+#endif
 #endif
 #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(SERIAL_TX_TIMEOUT_MS);
@@ -98,10 +104,21 @@ void setup() {
 #ifdef DEBUG_BOOT_TIMER
   // BENCH-ONLY: never defined by any production env in platformio.ini.
   // Boots straight into the WiFi timer page so the AP/web stack is reachable
-  // over USB serial without someone pressing SELECT on the bench.
+  // over USB serial without someone pressing SELECT on the bench, then cycles
+  // exit -> re-enter so the entry/exit cost is measurable end to end.
   Serial.println("[BENCH] auto-entering timer page");
   bool benchTimer = integrated.enterTimer();
   Serial.printf("[BENCH] enterTimer -> %d\n", benchTimer ? 1 : 0);
+  delay(8000);
+  Serial.println("[BENCH] exiting timer page");
+  integrated.exitTimer();
+  delay(3000);
+  Serial.println("[BENCH] re-entering timer page (warm)");
+  integrated.enterTimer();
+  delay(3000);
+  Serial.println("[BENCH] exiting timer page again");
+  integrated.exitTimer();
+  Serial.println("[BENCH] cycle done, running normally");
 #endif
 #endif
 
@@ -127,6 +144,27 @@ void loop() {
   if (!otaConfirmed && (millis() >= OTA_VERIFY_DELAY_MS)) {
     otaConfirmed = true;
     esp_ota_mark_app_valid_cancel_rollback();
+  }
+#endif
+
+  // Bench-only (TRACE_C3): drive the timer entry/exit cycle from loop() so the
+  // measurement runs in the PRODUCTION context — menu + buzzer + display + node
+  // already running, several seconds after boot — rather than inside setup().
+#ifdef DEBUG_TIMER_CYCLE
+  static int cycStage = 0;
+  static const uint32_t cycStart = 5000, cycPeriod = 20000;
+  if (millis() >= cycStart + (uint32_t)cycStage * cycPeriod) {
+    if (cycStage % 2 == 0) {
+      integrated.enterTimer();
+      TTRACE("enterTimer: DONE");
+    } else {
+#ifdef TIMER_TRACE
+      g_timerTraceN = 0;   // start a clean list so the next read shows exit + enter
+#endif
+      integrated.exitTimer();
+      TTRACE("exitTimer: DONE");
+    }
+    cycStage++;
   }
 #endif
 

@@ -2,6 +2,7 @@
 
 #include "integrated.h"
 #include "about.h"
+#include "config/config.h"
 #include <WiFi.h>
 #include <esp_ota_ops.h>
 
@@ -99,7 +100,7 @@ void IntegratedMode::enterScan() {
   }
   _timing.setActivated(false);
   _mode = IntMode::SCANNING;
-  Serial.println(F("Node paused: scanner page"));
+  Serial.println(F("Scanner on"));  // short on purpose: see VPRINT in config.h
 }
 
 // Scanner page exit: stop the scanner first (it may be mid bit-bang), then
@@ -115,12 +116,13 @@ void IntegratedMode::exitScan() {
   delay(5);
   startNode();
   _timing.setFrequency(_timing.getCurrentFrequency());  // force hardware re-tune
-  Serial.println(F("Node resumed after scanner page"));
+  Serial.println(F("Scanner off"));  // short on purpose: see VPRINT in config.h
 }
 
-// WiFi timer page entry: full AP + web bring-up (blocking, ~3-4s — the
-// menu shows the "Starting..." splash for exactly this window). The radio
-// is fully torn down on exit, so every entry re-runs the whole sequence.
+// WiFi timer page entry: full AP + web bring-up (blocking; measured 0.66 s on
+// the C3 with the USB port plugged in and unread — the menu shows the
+// "Starting..." splash for exactly this window). The radio is fully torn down on
+// exit, so every entry re-runs the whole sequence.
 bool IntegratedMode::enterTimer() {
   if (_mode == IntMode::TIMER) {
     return true;  // already up (re-press guard)
@@ -131,6 +133,7 @@ bool IntegratedMode::enterTimer() {
   }
   if (!_apUp) {
     Serial.println(F("Starting WiFi timer..."));
+    TTRACE("enterTimer: begin");
 #ifdef C3_DEBUG_AUTO_TIMER
     Serial.printf("[T] heap before setupAP: %lu\n", ESP.getFreeHeap());
 #endif
@@ -139,6 +142,7 @@ bool IntegratedMode::enterTimer() {
       startNode();
       return false;
     }
+    TTRACE("enterTimer: setupAP done");
 #ifdef C3_DEBUG_AUTO_TIMER
     Serial.println("[T] setupAP returned ok");
 #endif
@@ -147,11 +151,13 @@ bool IntegratedMode::enterTimer() {
       // down/up cycles; only the TCP listener needs re-binding)
       _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
       _webBegun = true;
+      TTRACE("enterTimer: web.begin done (first time only)");
 #ifdef C3_DEBUG_AUTO_TIMER
       Serial.println("[T] web.begin done");
 #endif
     }
     _web.start();  // wait for IP, mDNS, TCP listener
+    TTRACE("enterTimer: web.start done");
 #ifdef C3_DEBUG_AUTO_TIMER
     Serial.println("[T] web.start done");
 #endif
@@ -162,7 +168,7 @@ bool IntegratedMode::enterTimer() {
   // is left on the sweep's last frequency.
   _timing.setFrequency(_timing.getCurrentFrequency());
   _mode = IntMode::TIMER;
-  Serial.printf("Mode: WiFi timer (%s)\n", WiFi.softAPIP().toString().c_str());
+  VPRINT("Mode: WiFi timer (%s)\n", WiFi.softAPIP().toString().c_str());
   return true;
 }
 
@@ -178,15 +184,20 @@ void IntegratedMode::exitTimer() {
     return;
   }
   if (_apUp) {
+    TTRACE("exitTimer: teardown begin");
     _web.stop();
+    TTRACE("exitTimer: web.stop done");
     WiFi.softAPdisconnect(true);
+    TTRACE("exitTimer: softAPdisconnect done");
     delay(100);  // give the WiFi stack time to clean up
     WiFi.mode(WIFI_OFF);
     _apUp = false;
+    TTRACE("exitTimer: WIFI_OFF done");
     Serial.println(F("WiFi AP down"));
   }
   startNode();
-  Serial.println(F("Node resumed (WiFi off)"));
+  TTRACE("exitTimer: node resumed");
+  VPRINT("Node resumed (WiFi off)\n");
 }
 
 bool IntegratedMode::pauseForCalibration() {

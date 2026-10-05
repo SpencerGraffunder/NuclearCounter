@@ -58,12 +58,14 @@ bool SettingsManager::loadSettings(TimingCore* timingCore) {
     timingCore->setExitRssi(exit_rssi);
     timingCore->setMinLapMs(min_lap_ms);
 
-    Serial.println("\n=== Loaded Settings from Flash ===");
-    Serial.printf("Band: %d, Channel: %d\n", band, channel + 1);
-    Serial.printf("Frequency: %d MHz\n", timingCore->getCurrentFrequency());
-    Serial.printf("Enter RSSI: %d, Exit RSSI: %d\n", enter_rssi, exit_rssi);
-    Serial.printf("Min Lap: %lu ms\n", (unsigned long)min_lap_ms);
-    Serial.println("===================================\n");
+    // Six lines here cost ~3 s on a plugged-in C3 (see VPRINT in config.h), and
+    // loadSettings() runs on every return to the node baseline.
+    VPRINT("\n=== Loaded Settings from Flash ===\n");
+    VPRINT("Band: %d, Channel: %d\n", band, channel + 1);
+    VPRINT("Frequency: %d MHz\n", timingCore->getCurrentFrequency());
+    VPRINT("Enter RSSI: %d, Exit RSSI: %d\n", enter_rssi, exit_rssi);
+    VPRINT("Min Lap: %lu ms\n", (unsigned long)min_lap_ms);
+    VPRINT("===================================\n");
 
     return true;
 }
@@ -116,8 +118,8 @@ bool SettingsManager::saveSettings(TimingCore* timingCore) {
 
     prefs.end();
 
-    Serial.printf("Settings saved to flash: Band=%d, Channel=%d, Enter RSSI=%d, Exit RSSI=%d, MinLap=%lu ms\n",
-                  band, channel, enter_rssi, exit_rssi, (unsigned long)timingCore->getMinLapMs());
+    VPRINT("Settings saved to flash: Band=%d, Channel=%d, Enter RSSI=%d, Exit RSSI=%d, MinLap=%lu ms\n",
+           band, channel, enter_rssi, exit_rssi, (unsigned long)timingCore->getMinLapMs());
 
     return true;
 }

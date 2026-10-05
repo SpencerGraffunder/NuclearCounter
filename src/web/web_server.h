@@ -73,6 +73,9 @@ private:
 #ifdef TIMING_JITTER_PROBE
     void handleJitter(AsyncWebServerRequest* request);
 #endif
+#ifdef TIMER_TRACE
+    void handleTimerTrace(AsyncWebServerRequest* request);
+#endif
     void handleStyleCSS(AsyncWebServerRequest* request);
     void handleAppJS(AsyncWebServerRequest* request);
     void handleNotFound(AsyncWebServerRequest* request);

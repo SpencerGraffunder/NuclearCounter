@@ -8,6 +8,47 @@
  */
 #pragma once
 
+// Bench-only stage timer for the WiFi timer bring-up/teardown path.
+// Defined ONLY by the bench envs (-DTIMER_TRACE=1); every production env
+// compiles TTRACE() away to nothing.
+//
+// It RECORDS the timestamps rather than printing them, on purpose: the whole
+// point of the measurement is how long the bring-up takes when the USB-CDC host
+// has the port open but is not draining it, and printing a trace line is exactly
+// the operation that blocks there. Records are read back over HTTP (/api/timerstats)
+// after the cycle has run, so the observer does not perturb the measured thing.
+#ifdef TIMER_TRACE
+#include <stdint.h>
+typedef struct {
+  const char *stage;
+  uint32_t ms;
+} TimerTraceRec;
+#define TIMER_TRACE_MAX 40
+extern TimerTraceRec g_timerTrace[TIMER_TRACE_MAX];
+extern volatile int g_timerTraceN;
+void timerTraceRecord(const char *stage, uint32_t ms);
+#define TTRACE(msg) timerTraceRecord((msg), (uint32_t)millis())
+#else
+#define TTRACE(msg)
+#endif
+
+// Bring-up / teardown chatter, compiled OUT of every production build.
+//
+// GOTCHA (measured 2026-10-05 on the C3): on the USB-CDC boards a Serial write
+// is not free — when the host has the port open but is not draining it, the TX
+// FIFO backs up and every character blocks for up to SERIAL_TX_TIMEOUT_MS (20 ms;
+// Arduino's Print::write(buffer,size) loops per byte). The WiFi timer entry path
+// printed ~35 lines and the exit path ~14, which made ENTER take 11.5 s and EXIT
+// 5.8 s with the board plugged into an idle Mac — versus 1.7 s / 0.15 s when the
+// port was drained or unplugged. Same code, same radio: the delay was the logging.
+// Keep the diagnostic lines behind this flag (defined by the bench envs only) and
+// print at most one short line per transition in production.
+#ifdef VERBOSE_SERIAL
+#define VPRINT(...) Serial.printf(__VA_ARGS__)
+#else
+#define VPRINT(...)
+#endif
+
 // ---- Timing thresholds (0-255 RSSI scale, matching the SFOS web UI) ----
 #define ENTER_RSSI        120
 #define EXIT_RSSI         100

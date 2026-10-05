@@ -194,7 +194,8 @@ void Menu::handleButtons() {
             menuIndex = SCAN;
             break;
           case 1:  // WiFi Timer page: full AP + web bring-up happens inside
-            // enterTimer() (blocking, ~3-4s); the splash covers that window
+            // enterTimer() (blocking, measured 0.66 s on the C3); the splash
+            // covers that window
             menuIndex = WIFI;
             _timerCtrlCursor = 0;     // start the cursor on the Cross RSSI control
             _timerCtrlEditing = false;

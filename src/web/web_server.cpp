@@ -136,47 +136,43 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     if (!spiffsMounted) {
         Serial.println("Warning: SPIFFS Mount Failed (index.html won't be available, but API will work)");
     } else {
-        Serial.println("SPIFFS mounted successfully");
+        VPRINT("SPIFFS mounted successfully\n");
 
         // Get SPIFFS partition info
         size_t totalBytes = SPIFFS.totalBytes();
         size_t usedBytes = SPIFFS.usedBytes();
-        Serial.printf("SPIFFS Partition: %d bytes total, %d bytes used, %d bytes free\n",
-                     totalBytes, usedBytes, totalBytes - usedBytes);
+        VPRINT("SPIFFS Partition: %d bytes total, %d bytes used, %d bytes free\n",
+               totalBytes, usedBytes, totalBytes - usedBytes);
 
         // Debug: List all files in SPIFFS
-        Serial.println("=== SPIFFS Contents ===");
-        File root = SPIFFS.open("/");
-        if (!root) {
-            Serial.println("ERROR: Failed to open SPIFFS root directory");
-        } else if (!root.isDirectory()) {
-            Serial.println("ERROR: SPIFFS root is not a directory");
+        VPRINT("=== SPIFFS Contents ===\n");
+        if (SPIFFS.exists("/index.html")) {
+            File root = SPIFFS.open("/");
+            if (root && root.isDirectory()) {
+                File file = root.openNextFile();
+                int fileCount = 0;
+                while (file) {
+                    VPRINT("  File: %s, Size: %d bytes\n", file.name(), file.size());
+                    fileCount++;
+                    file = root.openNextFile();
+                }
+                if (fileCount == 0) {
+                    Serial.println("SPIFFS empty: no UI files (upload spiffs.bin)");
+                }
+            }
         } else {
-            File file = root.openNextFile();
-            int fileCount = 0;
-            while (file) {
-                Serial.printf("  File: %s, Size: %d bytes\n", file.name(), file.size());
-                fileCount++;
-                file = root.openNextFile();
-            }
-            if (fileCount == 0) {
-                Serial.println("  WARNING: SPIFFS is empty! No files found.");
-                Serial.println("  This means SPIFFS was not uploaded correctly or partition is empty.");
-            } else {
-                Serial.printf("Total files: %d\n", fileCount);
-            }
+            // Production-visible: this is the "timer page opens but shows nothing"
+            // failure, and the cause is a missing/never-uploaded spiffs image.
+            Serial.println("SPIFFS has no /index.html (upload spiffs.bin)");
         }
-        Serial.println("======================");
+        VPRINT("======================\n");
     }
 
-    // CRITICAL: Additional delay to ensure TCP/IP task is fully ready
-    // The TCP/IP stack needs time to initialize its internal structures
-    Serial.println("Waiting for TCP/IP stack to be fully ready...");
-    delay(500);  // Give TCP/IP task time to initialize
-
-    // Setup web server routes (ESPAsyncWebServer uses lambda callbacks)
-    // Route registration must happen AFTER TCP/IP stack is ready
-    Serial.println("Registering web server routes...");
+    // No delay here on purpose. Route registration is pure in-memory handler-list
+    // work; only _server.begin() (in start()) needs the TCP/IP stack. This used to
+    // carry a delay(500) "wait for TCP/IP" that ran once, on the first timer entry,
+    // for no reason.
+    VPRINT("Registering web server routes...\n");
     
     // Test route to verify server is working
     _server.on("/test", HTTP_GET, [](AsyncWebServerRequest* request) {
@@ -201,6 +197,12 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     // would drop the AP mid-measurement.
     _server.on("/api/jitter", HTTP_GET, [this](AsyncWebServerRequest* request) { handleJitter(request); });
 #endif
+#ifdef TIMER_TRACE
+    // Bench-only: read back the TTRACE() stage records (see src/config/config.h).
+    // Served over HTTP because printing them would perturb the very timing being
+    // measured (a USB-CDC write to an undrained port blocks).
+    _server.on("/api/timerstats", HTTP_GET, [this](AsyncWebServerRequest* request) { handleTimerTrace(request); });
+#endif
 
     // OTA: app-slot firmware updates + data partition (SPIFFS) file ops
     _otaManager.begin(&_server);
@@ -208,88 +210,58 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) { handleAppJS(request); });
     _server.onNotFound([this](AsyncWebServerRequest* request) { handleNotFound(request); });
 
-    Serial.println("Web server routes registered (listener starts in start())");
+    VPRINT("Web server routes registered (listener starts in start())\n");
 }
 
 // Per-AP-session bring-up: called on every timer-page entry, after the AP
 // is up.
 void WebServerManager::start() {
-    // CRITICAL: Wait for WiFi to be fully ready before initializing web server
-    // ESPAsyncWebServer requires TCP/IP stack to be initialized
-    Serial.println("Waiting for WiFi TCP/IP stack to be ready...");
+    TTRACE("web.start: begin");
+
+    // Wait for the AP IP to be assigned — that is what proves the TCP/IP stack
+    // is up, which is all _server.begin() needs. softAP() has already returned a
+    // valid IP in practice, so this loop normally runs zero iterations; the 3 s
+    // cap is a safety net, not an expected cost. It used to cap at 10 s and print
+    // its way through the wait — that is where a "10 second" timer entry came
+    // from whenever the AP did not come up cleanly.
     int wifiWaitCount = 0;
-    const int maxWait = 100; // 10 seconds max wait
-    
-    // For AP mode, wait for AP IP to be assigned (indicates TCP/IP stack is ready)
-    if (WiFi.getMode() & WIFI_AP) {
-        while (WiFi.softAPIP().toString() == "0.0.0.0" && wifiWaitCount < maxWait) {
-            delay(100);
-            wifiWaitCount++;
-        }
-        if (WiFi.softAPIP().toString() != "0.0.0.0") {
-            Serial.printf("WiFi AP ready: %s\n", WiFi.softAPIP().toString().c_str());
-        } else {
-            Serial.println("WARNING: WiFi AP IP not assigned after 10 seconds!");
-        }
-    } else {
-        // For STA mode, wait for connection
-        while (WiFi.status() != WL_CONNECTED && wifiWaitCount < maxWait) {
-            delay(100);
-            wifiWaitCount++;
-        }
-        if (WiFi.status() == WL_CONNECTED) {
-            Serial.printf("WiFi STA ready: %s\n", WiFi.localIP().toString().c_str());
-        } else {
-            Serial.println("WARNING: WiFi STA not connected after 10 seconds!");
-        }
+    const int maxWait = 30;  // 3 s
+    while (WiFi.softAPIP().toString() == "0.0.0.0" && wifiWaitCount < maxWait) {
+        delay(100);
+        wifiWaitCount++;
     }
-    
-    // Additional small delay to ensure TCP/IP stack is fully initialized
-    delay(200);
+    if (WiFi.softAPIP().toString() == "0.0.0.0") {
+        Serial.println(F("Web: AP IP not assigned, listener not started"));
+        return;
+    }
+    delay(50);  // let the AP interface settle before binding the listener
+    TTRACE("web.start: AP IP wait done");
 
     // Initialize mDNS for .local hostname (after WiFi is ready). Re-called
     // on every AP bring-up: MDNS.begin() returns false when the responder
     // already exists (service already registered), so re-calling is safe.
     if (MDNS.begin(MDNS_HOSTNAME)) {
-        Serial.printf("mDNS responder started: %s.local\n", MDNS_HOSTNAME);
         MDNS.addService("http", "tcp", WEB_SERVER_PORT);
     }
+    TTRACE("web.start: mDNS done");
 
-    // CRITICAL: Additional delay to ensure TCP/IP task is fully ready
-    // The TCP/IP stack needs time to initialize its internal structures
-    Serial.println("Waiting for TCP/IP stack to be fully ready...");
-    delay(500);  // Give TCP/IP task time to initialize
-
-    Serial.println("Starting web server...");
-    
-    // Verify WiFi is still ready before starting server
-    if (WiFi.getMode() & WIFI_AP) {
-        IPAddress apIP = WiFi.softAPIP();
-        if (apIP.toString() == "0.0.0.0") {
-            Serial.println("ERROR: WiFi AP IP not assigned! Cannot start web server.");
-            return;
-        }
-        Serial.printf("WiFi AP IP confirmed: %s\n", apIP.toString().c_str());
-    }
-    
-    // Configure server with longer timeouts for large file transfers
-    // This helps prevent NS_ERROR_NET_PARTIAL_TRANSFER errors
     _server.begin();
-    
-    // Note: ESPAsyncWebServer doesn't expose timeout configuration directly,
-    // but AsyncTCP (which it uses) respects system TCP settings configured in platformio.ini
-    
-    Serial.println("Web server started (ESPAsyncWebServer)");
-    Serial.printf("IP address: %s\n", WiFi.softAPIP().toString().c_str());
-    Serial.printf("mDNS hostname: %s.local\n", MDNS_HOSTNAME);
-    Serial.printf("Server listening on port 80\n");
-    Serial.println("Open browser to http://192.168.8.1 or http://nuclearcounter.local");
+    TTRACE("web.start: _server.begin returned");
+
+    // One short line, not six — see VPRINT in src/config/config.h for why the
+    // bring-up chatter is compiled out of production builds.
+    Serial.printf("Timer web: %s\n", WiFi.softAPIP().toString().c_str());
+    VPRINT("mDNS hostname: %s.local\n", MDNS_HOSTNAME);
+    VPRINT("Server listening on port %d\n", WEB_SERVER_PORT);
+    VPRINT("Open browser to http://192.168.8.1 or http://%s.local\n", MDNS_HOSTNAME);
 }
 
 // Close the TCP listener. Routes survive — start() re-binds.
 void WebServerManager::stop() {
+    TTRACE("web.stop: begin");
     _server.end();
-    Serial.println("Web server stopped (TCP listener closed)");
+    TTRACE("web.stop: _server.end returned");
+    VPRINT("Web server stopped (TCP listener closed)\n");
 }
 
 
@@ -809,6 +781,26 @@ void WebServerManager::handleJitter(AsyncWebServerRequest* request) {
              (unsigned long)s.buckets[0], (unsigned long)s.buckets[1], (unsigned long)s.buckets[2],
              (unsigned long)s.buckets[3], (unsigned long)s.buckets[4], (unsigned long)s.buckets[5],
              (unsigned long)s.buckets[6], (unsigned long)s.buckets[7], (unsigned long)s.buckets[8]);
+    request->send(200, "application/json", buf);
+}
+#endif
+
+#ifdef TIMER_TRACE
+void WebServerManager::handleTimerTrace(AsyncWebServerRequest* request) {
+    // Compact form: one "stage:elapsed_from_previous_stage" pair per record, so a
+    // single read shows where the time actually went.
+    static char buf[1600];
+    int n = 0;
+    n += snprintf(buf + n, sizeof(buf) - n, "{\"count\":%d,\"stages\":[", g_timerTraceN);
+    uint32_t prev = 0;
+    for (int i = 0; i < g_timerTraceN && n < (int)sizeof(buf) - 96; i++) {
+        n += snprintf(buf + n, sizeof(buf) - n, "%s{\"stage\":\"%s\",\"ms\":%lu,\"delta\":%lu}",
+                      i ? "," : "", g_timerTrace[i].stage,
+                      (unsigned long)g_timerTrace[i].ms,
+                      (unsigned long)(g_timerTrace[i].ms - prev));
+        prev = g_timerTrace[i].ms;
+    }
+    n += snprintf(buf + n, sizeof(buf) - n, "]}");
     request->send(200, "application/json", buf);
 }
 #endif
