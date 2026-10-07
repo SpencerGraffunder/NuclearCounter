@@ -4,7 +4,12 @@
     <meta charset="UTF-8">
     <title>NuclearCounter Timer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" href="/style.css?v=7">
+    <!-- Bump ?v= on EVERY change to data/style.css or data/app.js: older
+         firmware served these with a 1-year immutable cache, so clients that
+         already cached a ?v=7 copy will never see new content under the same
+         URL. (Server now sends no-cache + content ETag, but this busts the
+         legacy caches once.) -->
+    <link rel="stylesheet" href="/style.css?v=8">
 </head>
 <body>
     <div class="container">
@@ -68,7 +73,7 @@
                     <div class="config-item">
                         <label for="minLapSlider">Min Lap Time (s, 0 = off):</label>
                         <div style="display: flex; align-items: center; gap: 10px;">
-                            <input type="range" id="minLapSlider" min="0" max="60" value="0" onchange="updateMinLapValue(this.value); updateThresholdsServer()" style="flex: 1;">
+                            <input type="range" id="minLapSlider" min="0" max="60" value="0" oninput="updateMinLapValue(this.value)" onchange="updateThresholdsServer()" style="flex: 1;">
                             <span id="minLapValue">0</span>
                         </div>
                     </div>
@@ -193,7 +198,7 @@
         </div>
     </div>
 
-    <script src="/app.js?v=7"></script>
+    <script src="/app.js?v=8"></script>
     <script>
         // Initialize thresholds from server on page load
         async function initializeThresholds() {

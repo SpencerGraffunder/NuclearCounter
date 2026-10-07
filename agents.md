@@ -32,6 +32,30 @@ and point at the code.
 - The panel **retains the last frame across a reset/hang**, so a board that
   resets mid-transition looks frozen on the old screen.
 
+## Web UI static-file caching — NuclearCounter
+
+- **Phones cached style.css/app.js for a YEAR because of `max-age=31536000,
+  immutable` + a `?v=` buster that never changed.** Older firmware served the
+  UI files with 1-year immutable caching, and `data/index.html` kept referencing
+  `?v=7` even after the files were re-flashed with fixes — so any client that
+  had loaded the page once kept the old UI indefinitely (the "Update panel
+  won't collapse" report that looked already-fixed was exactly this: the old
+  CSS lacked `#updateContent.collapsed`, and collapsing only animated the
+  50px top/bottom padding = "moves a tiny bit"). Fixed 2026-10-07: the server
+  now sends `no-cache` + a content-derived ETag (FNV-1a of the file —
+  `spiffsFileHash()` / `sendSpiffsFile()` in `src/web/web_server.cpp`) and
+  answers 304 on revalidation; `?v=` was bumped to 8 once to bust the legacy
+  caches. **Rule: bump the `?v=` number in `data/index.html` on EVERY edit to
+  `data/style.css` or `data/app.js`** — that is what frees clients stuck on a
+  pre-fix immutable cache.
+- The web UI mirrors the board into the config controls on every `/api/status`
+  poll (`RaceTimer.syncControls` in `data/app.js`) — the board is the source of
+  truth because the OLED timer page (or a second device) can change
+  band/channel/RSSI/min-lap at any time. Do not let the web controls drift
+  from `/api/status`, and keep the drag/focus guards so a poll can't yank a
+  slider out from under the user's finger (the server only learns a new slider
+  value when the drag ends, `onchange` → POST).
+
 ## USB CDC serial gotcha (NuclearCounter C3/S3) — blocking writes starve the main loop
 
 - With `ARDUINO_USB_CDC_ON_BOOT=1`, `Serial` is `USBCDC`, and `USBCDC::write()`

@@ -267,18 +267,61 @@ void WebServerManager::stop() {
 
 // ===== HTTP Handlers =====
 
-void WebServerManager::handleRoot(AsyncWebServerRequest* request) {
-    // ESPAsyncWebServer handles SPIFFS file serving efficiently with automatic chunking
-    // Don't open file twice - let ESPAsyncWebServer handle it internally to avoid conflicts
-    if (SPIFFS.exists("/index.html")) {
-        AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/index.html", "text/html");
-        // HTML should be revalidated (not cached long) since it contains versioned script/style links
-        response->addHeader("Cache-Control", "public, max-age=300, must-revalidate");  // 5 min cache, then revalidate
-        response->addHeader("ETag", "\"index-v5\"");  // Version tag for cache validation
-        request->send(response);
-    } else {
-        request->send(404, "text/plain", "index.html not found");
+// FNV-1a 32-bit hash of a SPIFFS file, used as a content-derived ETag so a
+// browser's revalidation (If-None-Match) answers 304 when the file is
+// unchanged and a fresh body when it was re-flashed. 0 = file unreadable.
+static uint32_t spiffsFileHash(const char* path) {
+    File f = SPIFFS.open(path, "r");
+    if (!f) return 0;
+    uint32_t h = 2166136261u;
+    uint8_t buf[256];
+    while (true) {
+        int n = f.read(buf, sizeof(buf));
+        if (n <= 0) break;
+        for (int i = 0; i < n; i++) {
+            h ^= buf[i];
+            h *= 16777619u;
+        }
     }
+    f.close();
+    return h;
+}
+
+// "no-cache" + content ETag + 304 — NOT the old 'max-age=31536000, immutable'
+// + static ?v= buster. That combination cached style.css/app.js for a YEAR
+// with no revalidation, and the ?v= number never changed when the files did,
+// so phones kept serving the old UI (broken Update-section collapse, stale
+// controls) long after re-flashes. no-cache forces a cheap revalidation on
+// every page load; the ETag lets an unchanged file answer 304 (headers only).
+static bool sendSpiffsFile(AsyncWebServerRequest* request, const char* path,
+                           const char* etagPrefix, const char* contentType) {
+    if (!SPIFFS.exists(path)) return false;
+    uint32_t h = spiffsFileHash(path);
+    if (!h) return false;
+    char etag[24];
+    snprintf(etag, sizeof(etag), "\"%s-%08lX\"", etagPrefix, (unsigned long)h);
+
+    // Revalidation: the browser cached a copy and is asking if it is current.
+    if (request->hasHeader("If-None-Match") &&
+        request->header("If-None-Match").indexOf(String(etag)) >= 0) {
+        AsyncWebServerResponse* notModified = request->beginResponse(304);
+        notModified->addHeader("ETag", etag);
+        notModified->addHeader("Cache-Control", "no-cache");
+        request->send(notModified);
+        return true;
+    }
+
+    AsyncWebServerResponse* response = request->beginResponse(SPIFFS, path, contentType);
+    response->addHeader("Cache-Control", "no-cache");
+    response->addHeader("ETag", etag);
+    request->send(response);
+    return true;
+}
+
+void WebServerManager::handleRoot(AsyncWebServerRequest* request) {
+    // index.html carries the ?v= busters for css/js, so it must revalidate too.
+    if (sendSpiffsFile(request, "/index.html", "index", "text/html")) return;
+    request->send(404, "text/plain", "index.html not found");
 }
 
 void WebServerManager::handleGetStatus(AsyncWebServerRequest* request) {
@@ -680,6 +723,25 @@ void WebServerManager::handleStyleCSS(AsyncWebServerRequest* request) {
     bool timingWasActive = false;
     
     if (SPIFFS.exists("/style.css")) {
+        // Revalidation FIRST: if the client's cached copy is current, answer
+        // 304 before pausing the timing core — a 304 transfers nothing, so
+        // pausing the lap detector 4-15 s for it would be pure loss.
+        {
+            uint32_t h = spiffsFileHash("/style.css");
+            if (h) {
+                char etag[24];
+                snprintf(etag, sizeof(etag), "\"style-%08lX\"", (unsigned long)h);
+                if (request->hasHeader("If-None-Match") &&
+                    request->header("If-None-Match").indexOf(String(etag)) >= 0) {
+                    AsyncWebServerResponse* notModified = request->beginResponse(304);
+                    notModified->addHeader("ETag", etag);
+                    notModified->addHeader("Cache-Control", "no-cache");
+                    request->send(notModified);
+                    return;
+                }
+            }
+        }
+
         // Get file size to calculate pause duration (conservative estimate)
         File testFile = SPIFFS.open("/style.css", "r");
         size_t fileSize = testFile ? testFile.size() : 20000;  // Default to 20KB if can't read
@@ -697,9 +759,17 @@ void WebServerManager::handleStyleCSS(AsyncWebServerRequest* request) {
         }
         
         AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/style.css", "text/css");
-        // Enable browser caching with 1 year expiration (versioned via ?v= in HTML)
-        response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
-        response->addHeader("ETag", "\"style-v5\"");  // Version tag for cache validation
+        // no-cache + content ETag: re-flashed UI shows up on the next page
+        // load instead of a year later (see sendSpiffsFile for the history).
+        response->addHeader("Cache-Control", "no-cache");
+        {
+            uint32_t h = spiffsFileHash("/style.css");
+            if (h) {
+                char etag[24];
+                snprintf(etag, sizeof(etag), "\"style-%08lX\"", (unsigned long)h);
+                response->addHeader("ETag", etag);
+            }
+        }
         request->send(response);
         
         // Schedule non-blocking resume after delay (prevents watchdog timeout)
@@ -721,6 +791,23 @@ void WebServerManager::handleAppJS(AsyncWebServerRequest* request) {
     bool timingWasActive = false;
     
     if (SPIFFS.exists("/app.js")) {
+        // Revalidation FIRST (see handleStyleCSS): 304 before any timing pause.
+        {
+            uint32_t h = spiffsFileHash("/app.js");
+            if (h) {
+                char etag[24];
+                snprintf(etag, sizeof(etag), "\"app-%08lX\"", (unsigned long)h);
+                if (request->hasHeader("If-None-Match") &&
+                    request->header("If-None-Match").indexOf(String(etag)) >= 0) {
+                    AsyncWebServerResponse* notModified = request->beginResponse(304);
+                    notModified->addHeader("ETag", etag);
+                    notModified->addHeader("Cache-Control", "no-cache");
+                    request->send(notModified);
+                    return;
+                }
+            }
+        }
+
         // Get file size to calculate pause duration (conservative estimate)
         File testFile = SPIFFS.open("/app.js", "r");
         size_t fileSize = testFile ? testFile.size() : 45000;  // Default to 45KB if can't read
@@ -738,10 +825,19 @@ void WebServerManager::handleAppJS(AsyncWebServerRequest* request) {
         }
         
         AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/app.js", "application/javascript");
-        // Enable browser caching with 1 year expiration (versioned via ?v=5 in HTML)
-        response->addHeader("Cache-Control", "public, max-age=31536000, immutable");
-        response->addHeader("ETag", "\"app-v5\"");  // Version tag for cache validation
+        // no-cache + content ETag: re-flashed UI shows up on the next page
+        // load instead of a year later (see sendSpiffsFile for the history).
+        response->addHeader("Cache-Control", "no-cache");
+        {
+            uint32_t h = spiffsFileHash("/app.js");
+            if (h) {
+                char etag[24];
+                snprintf(etag, sizeof(etag), "\"app-%08lX\"", (unsigned long)h);
+                response->addHeader("ETag", etag);
+            }
+        }
         request->send(response);
+
         
         // Schedule non-blocking resume after delay (prevents watchdog timeout)
         // ESPAsyncWebServer serves files asynchronously, so we schedule resume in background

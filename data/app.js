@@ -27,6 +27,7 @@ class RaceTimer {
             frequency: 5800        // VTX frequency
         };
         this.recordingActive = false;
+        this._dragSlider = null;  // slider element currently being dragged (sync guard)
 
         this.initializeUI();
         this.initializeCanvas();
@@ -142,6 +143,74 @@ class RaceTimer {
         
         // Initialize threshold line positions
         this.updateThresholdLines();
+
+        // Track which slider is being dragged so the /api/status poll (400 ms)
+        // doesn't snap a slider back to the server value mid-drag: the server
+        // only learns the new value when the drag ENDS (onchange -> POST).
+        ['enterRssiSlider', 'exitRssiSlider', 'minLapSlider'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const down = () => { this._dragSlider = el; };
+            const up = () => { if (this._dragSlider === el) this._dragSlider = null; };
+            el.addEventListener('pointerdown', down);
+            el.addEventListener('touchstart', down, { passive: true });
+            window.addEventListener('pointerup', up);
+            window.addEventListener('touchend', up);
+        });
+    }
+
+    // Mirror the board's live settings into the config controls. The board is
+    // the source of truth — the OLED timer page (or a second device) can change
+    // any of these — so every /api/status poll re-syncs the band/channel
+    // dropdowns and the RSSI / min-lap sliders. Without this, changes made on
+    // the screen never appeared in the web UI and a fresh page load showed the
+    // HTML defaults instead of the board's actual state.
+    syncControls(data) {
+        // Band/channel dropdowns from the live frequency. The frequency table
+        // was loaded from /api/get_channels; until then there is nothing to
+        // match against and a later poll will pick it up.
+        if (data.frequency !== undefined && this.channelData && typeof this.updateChannelOptions === 'function') {
+            const bandSelect = document.getElementById('bandSelect');
+            const channelSelect = document.getElementById('channelSelect');
+            if (bandSelect && channelSelect &&
+                document.activeElement !== bandSelect && document.activeElement !== channelSelect) {
+                for (const bandName of Object.keys(this.channelData)) {
+                    const match = (this.channelData[bandName] || []).find(ch => ch.frequency === data.frequency);
+                    if (!match) continue;
+                    if (bandSelect.value !== bandName) {
+                        bandSelect.value = bandName;
+                        this.updateChannelOptions(bandName);
+                    }
+                    if (channelSelect.value !== String(data.frequency) &&
+                        channelSelect.querySelector('option[value="' + data.frequency + '"]')) {
+                        channelSelect.value = String(data.frequency);
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Sliders mirror the server values (skipped while the user drags them).
+        let thresholdsChanged = false;
+        const mirror = (sliderId, spanId, value) => {
+            if (value === undefined) return;
+            const s = document.getElementById(sliderId);
+            const v = document.getElementById(spanId);
+            if (!s || !v || this._dragSlider === s) return;
+            if (String(s.value) !== String(value)) {
+                s.value = value;
+                v.textContent = value;
+                if (sliderId === 'enterRssiSlider' || sliderId === 'exitRssiSlider') {
+                    thresholdsChanged = true;  // graph threshold lines follow the sliders
+                }
+            }
+        };
+        mirror('enterRssiSlider', 'enterRssiValue', data.enter_rssi);
+        mirror('exitRssiSlider', 'exitRssiValue', data.exit_rssi);
+        mirror('minLapSlider', 'minLapValue', data.min_lap);
+        if (thresholdsChanged) {
+            this.updateThresholdLines();
+        }
     }
     
     connectWebSocket() {
@@ -234,6 +303,10 @@ class RaceTimer {
     
     updateStatus(data) {
         this.currentStatus = data;
+
+        // Keep the config controls (band/channel, RSSI thresholds, min lap)
+        // in sync with the board — see syncControls for why.
+        this.syncControls(data);
 
         // Store RSSI for graphing
         const rssiValue = data.rssi || data.current_rssi || 0;
