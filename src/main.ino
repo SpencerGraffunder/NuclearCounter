@@ -12,6 +12,12 @@
 #include "api.h"
 #endif
 
+#ifdef DEBUG_ROLLBACK_TEST
+// RBTC3 bench build: parses the "RBT" rollback command off USB CDC
+// (defined in src/debug_rollback_test.cpp, compiled only under this flag).
+void rbtDebugPoll();
+#endif
+
 // Create settings object to store settings state
 // Initialised with default settings
 Settings settings;
@@ -135,6 +141,11 @@ void setup() {
 }
 
 void loop() {
+#ifdef DEBUG_ROLLBACK_TEST
+  // RBTC3 bench build: parse the "RBT" rollback command off the USB-CDC
+  // stream before anything else touches it (see src/debug_rollback_test.cpp).
+  rbtDebugPoll();
+#endif
 #ifdef INTEGRATED
   // Confirm a freshly-OTA'd image once it has stayed up long enough (see
   // verifyRollbackLater above). No-op when the running image is already

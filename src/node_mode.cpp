@@ -279,6 +279,12 @@ void NodeMode::onLap(const LapData &lap) {
 }
 
 void NodeMode::handleSerialInput() {
+#ifdef DEBUG_ROLLBACK_TEST
+    // RBTC3 bench build: the USB-CDC stream is owned by rbtDebugPoll()
+    // (src/debug_rollback_test.cpp), which parses the "RBT" rollback command.
+    // Don't compete for the bytes with the binary baseline protocol.
+    return;
+#endif
     int iterCount = 0;
     // Process all available bytes (USB CDC can have multiple bytes queued)
     while (Serial.available() > 0) {
