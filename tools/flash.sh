@@ -43,8 +43,11 @@ done < manifest.txt
 for f in bootloader.bin partitions.bin nuclearcounter-ota0.bin starforge-ota1.bin; do
   [ -f "$f" ] || { echo "ERROR: missing $f" >&2; exit 1; }
 done
-# Shared spiffs UI image: nuclearcounter-ui.bin (NC INTEGRATED build, v3.0
-# packages), then hertzhunter-ui.bin (same UI under its old name), then
+# Shared spiffs UI image at UI_OFF. NC's V3_0 app no longer uses it (its web
+# UI is embedded in the app image — see tools/build_ui_pack.py); the image is
+# still written so StarForgeOS, which reads the same partition, has a UI.
+# Preference: nuclearcounter-ui.bin (NC INTEGRATED build, v3.0 packages), then
+# hertzhunter-ui.bin (same UI under its old name), then
 # starforge-ui.bin (SFOS build, v2.1 C3 package)
 UI_BIN=""
 [ -f nuclearcounter-ui.bin ] && UI_BIN="nuclearcounter-ui.bin"

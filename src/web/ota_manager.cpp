@@ -4,10 +4,6 @@
 // Generous: a 1.2MB image over a weak AP link should still finish.
 #define OTA_CHUNK_TIMEOUT_MS 120000UL
 
-// Max size of a single data-partition (SPIFFS) file upload.
-// The web UI files are tens of KB; 1MB is plenty and bounds flash wear.
-#define DATA_FILE_MAX_SIZE (1024UL * 1024UL)
-
 OtaManager::OtaManager() {
     otaMutex = xSemaphoreCreateMutex();
 }
@@ -42,10 +38,8 @@ void OtaManager::begin(AsyncWebServer* server) {
     server->on("/api/ota/abort", HTTP_POST, [this](AsyncWebServerRequest* r) { handleAbort(r); });
     server->on("/api/ota/boot", HTTP_POST, [this](AsyncWebServerRequest* r) { handleBoot(r); });
 
-    server->addHandler(new RawBodyHandler("/api/data/write",
-        [this](AsyncWebServerRequest* r, uint8_t* d, size_t l, size_t i, size_t t) { dataBody(r, d, l, i, t); },
-        [this](AsyncWebServerRequest* r) { dataDone(r); }));
-    server->on("/api/data/delete", HTTP_POST, [this](AsyncWebServerRequest* r) { handleDataDelete(r); });
+    // The web UI is compiled into the app image (see ota_manager.h), so there
+    // is no separate data-partition file API to register.
 }
 
 // ===== App slot (dual-boot) OTA =====
@@ -338,140 +332,3 @@ void OtaManager::handleBoot(AsyncWebServerRequest* request) {
     esp_restart();
 }
 
-// ===== Data partition (SPIFFS) file ops =====
-
-bool OtaManager::isValidDataPath(const String& pathIn, String& normalized) {
-    normalized = pathIn;
-    if (normalized.length() < 2 || normalized.length() > 128) return false;
-    if (normalized[0] != '/') normalized = "/" + normalized;
-
-    // Walk the path: no traversal, safe charset only.
-    String seg;
-    for (int i = 1; i < (int)normalized.length(); i++) {
-        char c = normalized[i];
-        if (c == '/') {
-            if (seg.length() < 1 || seg == "." || seg == "..") return false;
-            seg = "";
-            continue;
-        }
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-              c == '.' || c == '_')) {
-            return false;
-        }
-        seg += c;
-    }
-    if (seg.length() < 1 || seg == "." || seg == "..") return false;
-    // Don't allow a file named just "." or hidden dotfiles at root
-    if (normalized == "/.") return false;
-    return true;
-}
-
-void OtaManager::dataBody(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total) {
-    // Write every call's bytes unconditionally (onBody fires once per TCP
-    // segment); the HTTP response is sent exactly once from dataDone().
-    (void)total;
-    dataErrCode = 0;
-    dataErrMsg = "";
-
-    if (!xSemaphoreTake(otaMutex, portMAX_DELAY)) return;
-    if (index == 0) {
-        // Start of a new file upload: reset any previous error, validate + open.
-        dataErrCode = 0;
-        dataErrMsg = "";
-        if (dataWriting) {  // previous upload abandoned mid-stream — recover
-            dataFile.close();
-            dataWriting = false;
-        }
-        if (total == 0 || total > DATA_FILE_MAX_SIZE) {
-            xSemaphoreGive(otaMutex);
-            dataErrCode = 413; dataErrMsg = "file_too_large";
-            return;
-        }
-        if (!SPIFFS.begin(false)) {
-            xSemaphoreGive(otaMutex);
-            dataErrCode = 500; dataErrMsg = "spiffs_not_mounted";
-            return;
-        }
-        if ((size_t)(SPIFFS.totalBytes() - SPIFFS.usedBytes()) < total) {
-            xSemaphoreGive(otaMutex);
-            dataErrCode = 507; dataErrMsg = "not_enough_space";
-            return;
-        }
-        dataFile = SPIFFS.open(dataPath.c_str(), "w");
-        if (!dataFile) {
-            xSemaphoreGive(otaMutex);
-            dataErrCode = 500; dataErrMsg = "open_failed";
-            return;
-        }
-        dataWriting = true;
-        dataReceived = 0;
-        dataExpected = total;
-        xSemaphoreGive(otaMutex);
-        return;
-    }
-    if (!dataWriting) {
-        // Continuation of a POST we never started (client retried?) — reject.
-        xSemaphoreGive(otaMutex);
-        dataErrCode = 409; dataErrMsg = "no_active_write";
-        return;
-    }
-
-    bool failed = !dataFile || dataFile.write(data, len) != (int)len;
-    dataReceived += len;
-    if (failed && dataErrCode == 0) { dataErrCode = 500; dataErrMsg = "write_failed"; }
-    xSemaphoreGive(otaMutex);
-}
-
-void OtaManager::dataDone(AsyncWebServerRequest* request) {
-    if (dataErrCode != 0) {
-        xSemaphoreTake(otaMutex, portMAX_DELAY);
-        if (dataWriting) { dataFile.close(); dataWriting = false; }
-        xSemaphoreGive(otaMutex);
-        request->send(dataErrCode, "application/json", "{\"error\":\"" + dataErrMsg + "\"}");
-        return;
-    }
-    if (dataWriting) {
-        xSemaphoreTake(otaMutex, portMAX_DELAY);
-        dataFile.close();
-        dataWriting = false;
-        bool ok = dataReceived == dataExpected;
-        String path = dataPath;
-        size_t received = dataReceived;
-        xSemaphoreGive(otaMutex);
-        if (ok) {
-            Serial.printf("Data file written: %s (%u bytes)\n", path.c_str(), (unsigned)received);
-            request->send(200, "application/json",
-                          "{\"status\":\"written\",\"path\":\"" + path.substring(1) + "\",\"size\":" + String((unsigned)received) + "}");
-        } else {
-            request->send(500, "application/json", "{\"error\":\"short_write\"}");
-        }
-        return;
-    }
-    // No active write: the body was consumed by the framework's form parser
-    // (wrong content type) or the POST had an empty/invalid body. dataBody
-    // never ran, so there is nothing on disk to clean up.
-    request->send(415, "application/json", "{\"error\":\"unsupported_content_type\",\"hint\":\"Content-Type: application/octet-stream required\"}");
-}
-
-void OtaManager::handleDataDelete(AsyncWebServerRequest* request) {
-    String pathParam = request->getParam("path") ? request->getParam("path")->value() : "";
-    String path;
-    if (!isValidDataPath(pathParam, path)) {
-        request->send(400, "application/json", "{\"error\":\"invalid_path\"}");
-        return;
-    }
-    if (!SPIFFS.begin(false)) {
-        request->send(500, "application/json", "{\"error\":\"spiffs_not_mounted\"}");
-        return;
-    }
-    if (!SPIFFS.exists(path)) {
-        request->send(404, "application/json", "{\"error\":\"not_found\"}");
-        return;
-    }
-    if (!SPIFFS.remove(path)) {
-        request->send(500, "application/json", "{\"error\":\"delete_failed\"}");
-        return;
-    }
-    Serial.printf("Data file deleted: %s\n", path.c_str());
-    request->send(200, "application/json", "{\"status\":\"deleted\",\"path\":\"" + path.substring(1) + "\"}");
-}

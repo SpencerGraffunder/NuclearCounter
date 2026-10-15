@@ -155,7 +155,7 @@ private:
 
   IntMode _mode = IntMode::NODE;
   bool _timingBegun = false;
-  bool _webBegun = false;  // one-time web init done (routes + SPIFFS)
+  bool _webBegun = false;  // one-time web init done (routes; UI is embedded in the image)
   bool _apUp = false;      // AP radio currently up (timer page active)
 
   // Race state shared with the web server (web start/stop-race semantics).

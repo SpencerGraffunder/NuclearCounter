@@ -2,7 +2,6 @@
 #define WEB_SERVER_H
 
 #include <Arduino.h>
-#include <SPIFFS.h>
 #include <ESPAsyncWebServer.h>
 #include <vector>
 #include "timing_core.h"
@@ -19,7 +18,8 @@ public:
 
     // Initialize web server with routes and start listening
     // Must be called after WiFi AP is up
-    // One-time init: save state pointers, mount SPIFFS, register routes.
+    // One-time init: save state pointers, register routes. The web UI is
+    // embedded in the image (generated/ui_pack.h), so nothing to mount.
     // Does NOT start the TCP listener or touch mDNS.
     void begin(TimingCore* timingCore, SettingsManager* settingsManager,
                bool* raceActive, uint32_t* raceStartTime, std::vector<LapData>* laps);
@@ -69,7 +69,6 @@ private:
     void handleSetFrequency(AsyncWebServerRequest* request);
     void handleSetThreshold(AsyncWebServerRequest* request);
     void handleGetChannels(AsyncWebServerRequest* request);
-    void handleGetSPIFFSInfo(AsyncWebServerRequest* request);
 #ifdef TIMING_JITTER_PROBE
     void handleJitter(AsyncWebServerRequest* request);
 #endif

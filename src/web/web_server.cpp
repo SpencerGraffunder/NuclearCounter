@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "config/config.h"
 #include "settings/settings_manager.h"
+#include "generated/ui_pack.h"  // web UI embedded in the image (tools/build_ui_pack.py)
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <Preferences.h>
@@ -16,7 +17,6 @@
 #define JSON_LAPS_BUFFER_SIZE 16384       // Laps response (100 laps max: ~160 bytes each)
 #define JSON_RSSI_BUFFER_SIZE 32768       // RSSI history (30K samples max: ~20 bytes each)
 #define JSON_CHANNELS_BUFFER_SIZE 2048    // Channels response (static data)
-#define JSON_SPIFFS_BUFFER_SIZE 2048     // SPIFFS info response
 
 // Helper structure for delayed timing resume (non-blocking)
 struct TimingResumeData {
@@ -118,55 +118,21 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _raceStartTime = raceStartTime;
     _laps = laps;
 
-    // One-time init only: SPIFFS + route registration. The IP wait, mDNS
+    // One-time init only: route registration. The IP wait, mDNS
     // and the TCP listener itself live in start(), which runs on every AP
     // bring-up (the AP is torn down on timer-page exit, so the listener
     // must be re-bound each time).
     // Route registration is pure in-memory handler-list work — it does not
     // need the TCP/IP stack up; only _server.begin() (in start()) does.
 
-    // Initialize SPIFFS for serving static files
-    bool spiffsMounted = false;
-    if (SPIFFS.begin(false)) {
-        spiffsMounted = true;
-    } else {
-        spiffsMounted = SPIFFS.begin(true);
-    }
-
-    if (!spiffsMounted) {
-        Serial.println("Warning: SPIFFS Mount Failed (index.html won't be available, but API will work)");
-    } else {
-        VPRINT("SPIFFS mounted successfully\n");
-
-        // Get SPIFFS partition info
-        size_t totalBytes = SPIFFS.totalBytes();
-        size_t usedBytes = SPIFFS.usedBytes();
-        VPRINT("SPIFFS Partition: %d bytes total, %d bytes used, %d bytes free\n",
-               totalBytes, usedBytes, totalBytes - usedBytes);
-
-        // Debug: List all files in SPIFFS
-        VPRINT("=== SPIFFS Contents ===\n");
-        if (SPIFFS.exists("/index.html")) {
-            File root = SPIFFS.open("/");
-            if (root && root.isDirectory()) {
-                File file = root.openNextFile();
-                int fileCount = 0;
-                while (file) {
-                    VPRINT("  File: %s, Size: %d bytes\n", file.name(), file.size());
-                    fileCount++;
-                    file = root.openNextFile();
-                }
-                if (fileCount == 0) {
-                    Serial.println("SPIFFS empty: no UI files (upload spiffs.bin)");
-                }
-            }
-        } else {
-            // Production-visible: this is the "timer page opens but shows nothing"
-            // failure, and the cause is a missing/never-uploaded spiffs image.
-            Serial.println("SPIFFS has no /index.html (upload spiffs.bin)");
-        }
-        VPRINT("======================\n");
-    }
+    // The web UI is compiled into this image (generated/ui_pack.h) — there is
+    // no filesystem to mount and nothing for a flash step to forget. The old
+    // SPIFFS-partition UI could silently stay stale after an OTA because the
+    // OTA only wrote the app slot; embedding the UI makes app+UI one atomic
+    // update, protected by the rollback slot together.
+    size_t uiTotal = 0;
+    for (unsigned i = 0; i < uipack::kCount; i++) uiTotal += uipack::kEntries[i].size;
+    VPRINT("Web UI embedded in image: %u files, %u bytes\n", (unsigned)uipack::kCount, (unsigned)uiTotal);
 
     // No delay here on purpose. Route registration is pure in-memory handler-list
     // work; only _server.begin() (in start()) needs the TCP/IP stack. This used to
@@ -189,7 +155,6 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _server.on("/api/set_frequency", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetFrequency(request); });
     _server.on("/api/set_threshold", HTTP_POST, [this](AsyncWebServerRequest* request) { handleSetThreshold(request); });
     _server.on("/api/get_channels", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetChannels(request); });
-    _server.on("/api/spiffs_info", HTTP_GET, [this](AsyncWebServerRequest* request) { handleGetSPIFFSInfo(request); });
 #ifdef TIMING_JITTER_PROBE
     // Bench-only (compiled out of every production env; see [env:JITTER_C3]).
     // Sample-interval stats are served over HTTP on purpose: opening this
@@ -204,7 +169,8 @@ void WebServerManager::begin(TimingCore* timingCore, SettingsManager* settingsMa
     _server.on("/api/timerstats", HTTP_GET, [this](AsyncWebServerRequest* request) { handleTimerTrace(request); });
 #endif
 
-    // OTA: app-slot firmware updates + data partition (SPIFFS) file ops
+    // OTA: app-slot firmware updates (the web UI is embedded in the image,
+    // so a single OTA updates both)
     _otaManager.begin(&_server);
     _server.on("/style.css", HTTP_GET, [this](AsyncWebServerRequest* request) { handleStyleCSS(request); });
     _server.on("/app.js", HTTP_GET, [this](AsyncWebServerRequest* request) { handleAppJS(request); });
@@ -267,41 +233,32 @@ void WebServerManager::stop() {
 
 // ===== HTTP Handlers =====
 
-// FNV-1a 32-bit hash of a SPIFFS file, used as a content-derived ETag so a
-// browser's revalidation (If-None-Match) answers 304 when the file is
-// unchanged and a fresh body when it was re-flashed. 0 = file unreadable.
-static uint32_t spiffsFileHash(const char* path) {
-    File f = SPIFFS.open(path, "r");
-    if (!f) return 0;
+// FNV-1a 32-bit over an embedded UI file, used as a content-derived ETag:
+// clients revalidate with If-None-Match and get a 304 (headers only) when the
+// firmware they loaded from matches the one their copy came from.
+static uint32_t uiFileHash(const uipack::Entry* e) {
     uint32_t h = 2166136261u;
-    uint8_t buf[256];
-    while (true) {
-        int n = f.read(buf, sizeof(buf));
-        if (n <= 0) break;
-        for (int i = 0; i < n; i++) {
-            h ^= buf[i];
-            h *= 16777619u;
-        }
+    for (uint32_t i = 0; i < e->size; i++) {
+        h ^= e->data[i];
+        h *= 16777619u;
     }
-    f.close();
     return h;
 }
 
-// "no-cache" + content ETag + 304 — NOT the old 'max-age=31536000, immutable'
-// + static ?v= buster. That combination cached style.css/app.js for a YEAR
-// with no revalidation, and the ?v= number never changed when the files did,
-// so phones kept serving the old UI (broken Update-section collapse, stale
-// controls) long after re-flashes. no-cache forces a cheap revalidation on
-// every page load; the ETag lets an unchanged file answer 304 (headers only).
-static bool sendSpiffsFile(AsyncWebServerRequest* request, const char* path,
-                           const char* etagPrefix, const char* contentType) {
-    if (!SPIFFS.exists(path)) return false;
-    uint32_t h = spiffsFileHash(path);
-    if (!h) return false;
-    char etag[24];
-    snprintf(etag, sizeof(etag), "\"%s-%08lX\"", etagPrefix, (unsigned long)h);
+static const uipack::Entry* findUiFile(const char* name) {
+    for (unsigned i = 0; i < uipack::kCount; i++) {
+        if (strcmp(uipack::kEntries[i].name, name) == 0) return &uipack::kEntries[i];
+    }
+    return nullptr;
+}
 
-    // Revalidation: the browser cached a copy and is asking if it is current.
+// Answer a revalidation request with 304 when the client's copy is current.
+// Must run BEFORE any timing-core pause: a 304 transfers nothing, so pausing
+// the lap detector to save a few KB would be pure loss. Returns true if the
+// request was fully answered.
+static bool uiRevalidate(AsyncWebServerRequest* request, const uipack::Entry* e) {
+    char etag[24];
+    snprintf(etag, sizeof(etag), "\"%s-%08lX\"", e->name, (unsigned long)uiFileHash(e));
     if (request->hasHeader("If-None-Match") &&
         request->header("If-None-Match").indexOf(String(etag)) >= 0) {
         AsyncWebServerResponse* notModified = request->beginResponse(304);
@@ -310,18 +267,56 @@ static bool sendSpiffsFile(AsyncWebServerRequest* request, const char* path,
         request->send(notModified);
         return true;
     }
+    return false;
+}
 
-    AsyncWebServerResponse* response = request->beginResponse(SPIFFS, path, contentType);
+// "no-cache" + content ETag + 304 (see uiRevalidate) — NOT the old
+// 'max-age=31536000, immutable' + static ?v= buster. That combination cached
+// style.css/app.js for a YEAR with no revalidation, and the ?v= number never
+// changed when the files did, so phones kept serving the old UI long after
+// re-flashes. (Now the UI is embedded in the image, so a firmware update
+// always brings a matching UI — the ETag just saves the re-upload.)
+static AsyncWebServerResponse* uiResponse(AsyncWebServerRequest* request, const uipack::Entry* e) {
+    char etag[24];
+    snprintf(etag, sizeof(etag), "\"%s-%08lX\"", e->name, (unsigned long)uiFileHash(e));
+    AsyncWebServerResponse* response = request->beginResponse(
+        e->mime, e->size, [e](uint8_t* buffer, size_t len, size_t index) -> size_t {
+            if (index >= e->size) return 0;
+            if (index + len > e->size) len = e->size - index;
+            memcpy(buffer, e->data + index, len);
+            return len;
+        });
     response->addHeader("Cache-Control", "no-cache");
     response->addHeader("ETag", etag);
-    request->send(response);
-    return true;
+    return response;
+}
+
+// Full-body serve of an embedded UI file, with the timing core paused for a
+// conservative window while the transfer is in flight (same policy the old
+// SPIFFS streaming path used; 304 revalidations skip the pause entirely).
+// baseMs/capMs are the old per-file values (css: 4s/15s, js: 6s/20s).
+static void serveUiFile(AsyncWebServerRequest* request, const uipack::Entry* e,
+                        TimingCore* timingCore, uint32_t baseMs, uint32_t capMs) {
+    bool timingWasActive = false;
+    uint32_t pauseMs = ((e->size * 4000) / 30000) + baseMs;  // ~30KB/s estimate, 4x margin
+    if (pauseMs > capMs) pauseMs = capMs;
+    if (timingCore) {
+        timingWasActive = timingCore->pauseTemporarily(pauseMs);
+    }
+    request->send(uiResponse(request, e));
+    // Resume in a background task (not a blocking delay — watchdog safety).
+    scheduleTimingResume(timingCore, timingWasActive, pauseMs);
 }
 
 void WebServerManager::handleRoot(AsyncWebServerRequest* request) {
-    // index.html carries the ?v= busters for css/js, so it must revalidate too.
-    if (sendSpiffsFile(request, "/index.html", "index", "text/html")) return;
-    request->send(404, "text/plain", "index.html not found");
+    const uipack::Entry* e = findUiFile("index.html");
+    if (!e) {
+        request->send(404, "text/plain", "index.html not built into this image");
+        return;
+    }
+    if (uiRevalidate(request, e)) return;
+    // No timing pause for index.html (small, and the old path never paused it).
+    request->send(uiResponse(request, e));
 }
 
 void WebServerManager::handleGetStatus(AsyncWebServerRequest* request) {
@@ -649,208 +644,35 @@ void WebServerManager::handleGetChannels(AsyncWebServerRequest* request) {
     request->send(200, "application/json", channelsJson);
 }
 
-void WebServerManager::handleGetSPIFFSInfo(AsyncWebServerRequest* request) {
-    static char jsonBuffer[JSON_SPIFFS_BUFFER_SIZE];
-    
-    bool mounted = SPIFFS.begin(false);
-    int len = snprintf(jsonBuffer, JSON_SPIFFS_BUFFER_SIZE, "{\"mounted\":%s,", mounted ? "true" : "false");
-    
-    if (len < 0 || len >= (int)JSON_SPIFFS_BUFFER_SIZE) {
-        request->send(500, "application/json", "{\"error\":\"buffer_overflow\"}");
-        return;
-    }
-
-    if (mounted) {
-        size_t totalBytes = SPIFFS.totalBytes();
-        size_t usedBytes = SPIFFS.usedBytes();
-        len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len,
-            "\"total_bytes\":%zu,\"used_bytes\":%zu,\"free_bytes\":%zu,\"files\":[",
-            totalBytes, usedBytes, totalBytes - usedBytes);
-        
-        if (len < 0 || len >= (int)JSON_SPIFFS_BUFFER_SIZE) {
-            request->send(500, "application/json", "{\"error\":\"buffer_overflow\"}");
-            return;
-        }
-
-        File root = SPIFFS.open("/");
-        if (root && root.isDirectory()) {
-            File file = root.openNextFile();
-            bool first = true;
-            int fileCount = 0;
-            const int MAX_FILES = 20;  // Limit files to prevent buffer overflow
-            
-            while (file && fileCount < MAX_FILES) {
-                if (!first) {
-                    len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len, ",");
-                    if (len < 0 || len >= (int)JSON_SPIFFS_BUFFER_SIZE) break;
-                }
-                
-                // Escape filename and limit length to prevent overflow
-                const char* name = file.name();
-                size_t nameLen = strlen(name);
-                if (nameLen > 64) nameLen = 64;  // Limit filename length
-                
-                len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len,
-                    "{\"name\":\"%.*s\",\"size\":%zu}", (int)nameLen, name, file.size());
-                
-                if (len < 0 || len >= (int)JSON_SPIFFS_BUFFER_SIZE) break;
-                
-                first = false;
-                fileCount++;
-                file = root.openNextFile();
-            }
-        }
-        
-        len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len, "]");
-    } else {
-        len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len, "\"error\":\"SPIFFS not mounted\"");
-    }
-
-    if (len > 0 && len < (int)JSON_SPIFFS_BUFFER_SIZE - 2) {
-        len += snprintf(jsonBuffer + len, JSON_SPIFFS_BUFFER_SIZE - len, "}");
-        if (len > 0 && len < (int)JSON_SPIFFS_BUFFER_SIZE) {
-            request->send(200, "application/json", jsonBuffer);
-            return;
-        }
-    }
-
-    request->send(500, "application/json", "{\"error\":\"response_too_large\"}");
-}
-
 void WebServerManager::handleStyleCSS(AsyncWebServerRequest* request) {
-    // ESPAsyncWebServer handles SPIFFS file serving efficiently with automatic chunking
-    // Temporarily pause timing core to give file transfer full CPU (prevents partial transfer errors)
-    bool timingWasActive = false;
-    
-    if (SPIFFS.exists("/style.css")) {
-        // Revalidation FIRST: if the client's cached copy is current, answer
-        // 304 before pausing the timing core — a 304 transfers nothing, so
-        // pausing the lap detector 4-15 s for it would be pure loss.
-        {
-            uint32_t h = spiffsFileHash("/style.css");
-            if (h) {
-                char etag[24];
-                snprintf(etag, sizeof(etag), "\"style-%08lX\"", (unsigned long)h);
-                if (request->hasHeader("If-None-Match") &&
-                    request->header("If-None-Match").indexOf(String(etag)) >= 0) {
-                    AsyncWebServerResponse* notModified = request->beginResponse(304);
-                    notModified->addHeader("ETag", etag);
-                    notModified->addHeader("Cache-Control", "no-cache");
-                    request->send(notModified);
-                    return;
-                }
-            }
-        }
-
-        // Get file size to calculate pause duration (conservative estimate)
-        File testFile = SPIFFS.open("/style.css", "r");
-        size_t fileSize = testFile ? testFile.size() : 20000;  // Default to 20KB if can't read
-        if (testFile) testFile.close();
-        
-        // Calculate pause time: file size / estimated WiFi speed (conservative: ~30KB/s for ESP32-C6)
-        // Use 4x margin for safety: (fileSize / 30000) * 4000ms, minimum 4 seconds
-        // ESPAsyncWebServer sends asynchronously, so we need generous pause time
-        uint32_t pauseMs = ((fileSize * 4000) / 30000) + 4000;  // At least 4 seconds, more for larger files
-        if (pauseMs > 15000) pauseMs = 15000;  // Cap at 15 seconds max
-        
-        // Pause timing core BEFORE sending file
-        if (_timingCore) {
-            timingWasActive = _timingCore->pauseTemporarily(pauseMs);
-        }
-        
-        AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/style.css", "text/css");
-        // no-cache + content ETag: re-flashed UI shows up on the next page
-        // load instead of a year later (see sendSpiffsFile for the history).
-        response->addHeader("Cache-Control", "no-cache");
-        {
-            uint32_t h = spiffsFileHash("/style.css");
-            if (h) {
-                char etag[24];
-                snprintf(etag, sizeof(etag), "\"style-%08lX\"", (unsigned long)h);
-                response->addHeader("ETag", etag);
-            }
-        }
-        request->send(response);
-        
-        // Schedule non-blocking resume after delay (prevents watchdog timeout)
-        // ESPAsyncWebServer serves files asynchronously, so we schedule resume in background
-        scheduleTimingResume(_timingCore, timingWasActive, pauseMs);
-    } else {
-        // Fallback error CSS
+    const uipack::Entry* e = findUiFile("style.css");
+    if (!e) {
+        // Fallback error CSS (should be impossible — the UI is compiled in).
         request->send(200, "text/css",
             "body{font-family:Arial,sans-serif;background:#1a1f35;color:#fff;padding:40px;text-align:center;}"
             "h1{color:#ff7b00;margin-bottom:20px;}"
             ".error{background:#2a0f0f;border:2px solid #ff3838;border-radius:8px;padding:30px;max-width:600px;margin:0 auto;}"
         );
+        return;
     }
+    if (uiRevalidate(request, e)) return;  // 304: no timing pause (see serveUiFile)
+    serveUiFile(request, e, _timingCore, 4000, 15000);  // old css pause values
 }
 
 void WebServerManager::handleAppJS(AsyncWebServerRequest* request) {
-    // ESPAsyncWebServer handles SPIFFS file serving efficiently with automatic chunking
-    // Temporarily pause timing core to give file transfer full CPU (prevents partial transfer errors)
-    bool timingWasActive = false;
-    
-    if (SPIFFS.exists("/app.js")) {
-        // Revalidation FIRST (see handleStyleCSS): 304 before any timing pause.
-        {
-            uint32_t h = spiffsFileHash("/app.js");
-            if (h) {
-                char etag[24];
-                snprintf(etag, sizeof(etag), "\"app-%08lX\"", (unsigned long)h);
-                if (request->hasHeader("If-None-Match") &&
-                    request->header("If-None-Match").indexOf(String(etag)) >= 0) {
-                    AsyncWebServerResponse* notModified = request->beginResponse(304);
-                    notModified->addHeader("ETag", etag);
-                    notModified->addHeader("Cache-Control", "no-cache");
-                    request->send(notModified);
-                    return;
-                }
-            }
-        }
-
-        // Get file size to calculate pause duration (conservative estimate)
-        File testFile = SPIFFS.open("/app.js", "r");
-        size_t fileSize = testFile ? testFile.size() : 45000;  // Default to 45KB if can't read
-        if (testFile) testFile.close();
-        
-        // Calculate pause time: file size / estimated WiFi speed (conservative: ~30KB/s for ESP32-C6)
-        // Use 4x margin for safety: (fileSize / 30000) * 4000ms, minimum 6 seconds
-        // ESPAsyncWebServer sends asynchronously, so we need generous pause time
-        uint32_t pauseMs = ((fileSize * 4000) / 30000) + 6000;  // At least 6 seconds, more for larger files
-        if (pauseMs > 20000) pauseMs = 20000;  // Cap at 20 seconds max
-        
-        // Pause timing core BEFORE sending file
-        if (_timingCore) {
-            timingWasActive = _timingCore->pauseTemporarily(pauseMs);
-        }
-        
-        AsyncWebServerResponse* response = request->beginResponse(SPIFFS, "/app.js", "application/javascript");
-        // no-cache + content ETag: re-flashed UI shows up on the next page
-        // load instead of a year later (see sendSpiffsFile for the history).
-        response->addHeader("Cache-Control", "no-cache");
-        {
-            uint32_t h = spiffsFileHash("/app.js");
-            if (h) {
-                char etag[24];
-                snprintf(etag, sizeof(etag), "\"app-%08lX\"", (unsigned long)h);
-                response->addHeader("ETag", etag);
-            }
-        }
-        request->send(response);
-
-        
-        // Schedule non-blocking resume after delay (prevents watchdog timeout)
-        // ESPAsyncWebServer serves files asynchronously, so we schedule resume in background
-        scheduleTimingResume(_timingCore, timingWasActive, pauseMs);
-    } else {
-        // Fallback error JavaScript
+    const uipack::Entry* e = findUiFile("app.js");
+    if (!e) {
+        // Fallback error JavaScript (should be impossible — the UI is compiled in).
         request->send(200, "application/javascript",
-            "console.error('app.js not found in SPIFFS - Please upload filesystem');"
+            "console.error('app.js not built into this firmware image');"
             "document.body.innerHTML='<div class=\"error\"><h1>⚠️ Files Missing</h1>"
             "<p>Web interface files not found on device.</p>"
-            "<p>Please run: <code>pio run -t uploadfs</code></p></div>';"
+            "<p>Please re-flash the board.</p></div>';"
         );
+        return;
     }
+    if (uiRevalidate(request, e)) return;  // 304: no timing pause (see serveUiFile)
+    serveUiFile(request, e, _timingCore, 6000, 20000);  // old js pause values
 }
 
 #ifdef TIMING_JITTER_PROBE

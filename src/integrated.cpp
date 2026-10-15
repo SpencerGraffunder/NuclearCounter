@@ -147,8 +147,9 @@ bool IntegratedMode::enterTimer() {
     Serial.println("[T] setupAP returned ok");
 #endif
     if (!_webBegun) {
-      // One-time: register routes + mount SPIFFS (both survive AP
-      // down/up cycles; only the TCP listener needs re-binding)
+      // One-time: register routes (the web UI is embedded in the image, so
+      // there is no filesystem to mount; routes survive AP down/up cycles,
+      // only the TCP listener needs re-binding)
       _web.begin(&_timing, &_timingSettings, &_raceActive, &_raceStartTime, &_laps);
       _webBegun = true;
       TTRACE("enterTimer: web.begin done (first time only)");

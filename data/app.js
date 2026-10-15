@@ -1233,10 +1233,9 @@ document.addEventListener('DOMContentLoaded', () => {
     window.raceTimer = raceTimer; // Make it globally accessible
     console.log('RaceTimer initialized:', raceTimer);
     loadOtaStatus();
-    loadDataFiles();
 });
 
-// ================= OTA: firmware + data partition updates =================
+// ================= OTA: firmware updates =================
 
 let otaData = null;      // last /api/ota/status payload
 let otaBusy = false;     // upload in progress
@@ -1412,83 +1411,6 @@ async function bootOtaSlot() {
 }
 
 // ---------- Data partition (web UI files) ----------
-
-async function loadDataFiles() {
-    const list = document.getElementById('dataFileList');
-    const note = document.getElementById('dataSpaceNote');
-    if (!list) return;
-    try {
-        const res = await fetch('/api/spiffs_info');
-        const data = await res.json();
-        if (!data.mounted) {
-            list.innerHTML = '<p class="no-laps">Data partition not mounted</p>';
-            return;
-        }
-        if (note) note.textContent = 'Data partition: ' + (data.used_bytes / 1024 / 1024).toFixed(2) +
-            ' MB used of ' + (data.total_bytes / 1024 / 1024).toFixed(2) + ' MB';
-        const files = data.files || [];
-        if (!files.length) {
-            list.innerHTML = '<p class="no-laps">No files in data partition</p>';
-            return;
-        }
-        list.innerHTML = files.map(f => {
-            const name = String(f.name).replace(/^\//, '');
-            const safe = name.replace(/'/g, "\\'");
-            return '<div class="data-file-row">' +
-                '<span class="data-file-name">' + name + '</span>' +
-                '<span class="data-file-size">' + (f.size / 1024).toFixed(1) + ' KB</span>' +
-                '<button class="btn btn-danger btn-small" onclick="deleteDataFile(\'' + safe + '\')">Delete</button>' +
-                '</div>';
-        }).join('');
-    } catch (e) {
-        console.error('Data file list failed:', e);
-        list.innerHTML = '<p class="no-laps">Failed to load file list</p>';
-    }
-}
-
-async function uploadDataFile() {
-    const input = document.getElementById('dataFileInput');
-    const file = input.files[0];
-    if (!file) {
-        showNotification('Choose a file to upload first', 'notif-red', 3000);
-        return;
-    }
-    const name = file.name.split('/').pop(); // flat: root of the partition only
-    if (!confirm('Upload "' + name + '" (' + (file.size / 1024).toFixed(1) + ' KB) to the web UI partition?\nExisting files with the same name are replaced.')) return;
-    const btn = document.getElementById('dataUploadBtn');
-    btn.disabled = true;
-    btn.textContent = 'Uploading...';
-    try {
-        const res = await fetch('/api/data/write?path=' + encodeURIComponent(name), {
-            method: 'POST',
-            body: file,
-            headers: { 'Content-Type': 'application/octet-stream' }
-        });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
-        showNotification('Uploaded ' + name, 'notif-green', 3000);
-        input.value = '';
-        loadDataFiles();
-    } catch (err) {
-        showNotification('Upload failed: ' + err, 'notif-red', 5000);
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Upload file';
-    }
-}
-
-async function deleteDataFile(name) {
-    if (!confirm('Delete "' + name + '" from the web UI partition?')) return;
-    try {
-        const res = await fetch('/api/data/delete?path=' + encodeURIComponent(name), { method: 'POST' });
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
-        showNotification('Deleted ' + name, 'notif-green', 3000);
-        loadDataFiles();
-    } catch (err) {
-        showNotification('Delete failed: ' + err, 'notif-red', 5000);
-    }
-}
 
 // Handle page visibility changes
 document.addEventListener('visibilitychange', () => {

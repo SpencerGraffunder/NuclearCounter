@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include <ESPAsyncWebServer.h>
-#include <SPIFFS.h>
 #include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -70,12 +69,12 @@ private:
 //       flash_dualboot.sh / DUALBOOT.md), but dual-booting to it via
 //       otadata is gone while an NC image occupies ota_1.
 //
-//  2. DATA PARTITION (SPIFFS, the web UI files)
-//     - File-level upload / delete on the mounted filesystem.
-//     - A whole-image swap is deliberately NOT supported: there is no
-//       staging partition in the table and the C3 has no PSRAM to stage in,
-//       and raw-writing under a mounted SPIFFS would corrupt it. File-level
-//       updates are served immediately (no reboot needed).
+// The web UI itself is NOT managed here: it is compiled into the app image
+// (src/web/generated/ui_pack.h, generated from data/ by tools/build_ui_pack.py),
+// so a single OTA updates app and UI atomically and the rollback slot protects
+// both. (It used to live in the SPIFFS partition at 0x330000, which made the
+// UI stale after every OTA; that partition is now unused by NC — the partition
+// table is intentionally unchanged.)
 class OtaManager {
 public:
     enum class OtaState { Idle, Uploading, Ready };
@@ -96,14 +95,8 @@ private:
     void handleAbort(AsyncWebServerRequest* request);        // POST /api/ota/abort
     void handleBoot(AsyncWebServerRequest* request);         // POST /api/ota/boot    {"slot":"ota_0"}
 
-    // ---- data partition (SPIFFS) handlers ----
-    void dataBody(AsyncWebServerRequest* request, uint8_t* data, size_t len, size_t index, size_t total);
-    void dataDone(AsyncWebServerRequest* request);           // POST /api/data/write?path=... (raw octet-stream body)
-    void handleDataDelete(AsyncWebServerRequest* request);   // POST /api/data/delete {"path":...}
-
     // Helpers
     const esp_partition_t* findSlot(const String& label);
-    bool isValidDataPath(const String& path, String& normalized);
 
     OtaState state = OtaState::Idle;
     const esp_partition_t* target = nullptr;
@@ -118,15 +111,6 @@ private:
     // per endpoint: two different POSTs may interleave segment-by-segment.
     int otaErrCode = 0;
     String otaErrMsg;
-    int dataErrCode = 0;
-    String dataErrMsg;
-
-    // Data-partition write state (one file at a time)
-    bool dataWriting = false;
-    String dataPath;
-    File dataFile;
-    size_t dataReceived = 0;
-    size_t dataExpected = 0;
 };
 
 #endif // OTA_MANAGER_H

@@ -4,12 +4,10 @@
     <meta charset="UTF-8">
     <title>NuclearCounter Timer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <!-- Bump ?v= on EVERY change to data/style.css or data/app.js: older
-         firmware served these with a 1-year immutable cache, so clients that
-         already cached a ?v=7 copy will never see new content under the same
-         URL. (Server now sends no-cache + content ETag, but this busts the
-         legacy caches once.) -->
-    <link rel="stylesheet" href="/style.css?v=8">
+    <!-- style.css / app.js are embedded in the firmware image (see
+         tools/build_ui_pack.py) and served with no-cache + content ETag, so
+         there is no ?v= cache buster to maintain. -->
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
     <div class="container">
@@ -124,18 +122,7 @@
                 <div id="otaBootRow" style="display:none; margin-top: 8px;">
                     <button class="btn btn-primary" id="otaBootBtn" onclick="bootOtaSlot()">🔄 Reboot into new firmware</button>
                 </div>
-                <p class="update-note">Only the slot that is NOT running can be updated from this page — the running firmware is protected. The board keeps running normally until you press the reboot button.</p>
-
-                <h4 class="update-subhead">Web UI files (data partition)</h4>
-                <div class="data-files" id="dataFileList">
-                    <p class="no-laps">Loading...</p>
-                </div>
-                <div class="data-file-actions">
-                    <input type="file" id="dataFileInput">
-                    <button class="btn btn-primary" id="dataUploadBtn" onclick="uploadDataFile()">Upload file</button>
-                </div>
-                <p class="update-note" id="dataSpaceNote"></p>
-                <p class="update-note">Uploaded files are served immediately — no reboot needed. Uploading a file with an existing name replaces it.</p>
+                <p class="update-note">Only the slot that is NOT running can be updated from this page — the running firmware is protected. The board keeps running normally until you press the reboot button. The web UI itself is part of the firmware image, so a firmware update also refreshes the page you are looking at (after the reboot).</p>
             </div>
         </div>
 
@@ -198,7 +185,7 @@
         </div>
     </div>
 
-    <script src="/app.js?v=8"></script>
+    <script src="/app.js"></script>
     <script>
         // Initialize thresholds from server on page load
         async function initializeThresholds() {

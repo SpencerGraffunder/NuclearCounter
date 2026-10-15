@@ -7,3 +7,5 @@ compile_commands.json
 
 # local CI-artifact test output
 dist/
+# generated from data/ by tools/build_ui_pack.py (see tools/build_ui_pack.py)
+src/web/generated/
