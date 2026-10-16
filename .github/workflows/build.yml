@@ -152,6 +152,39 @@ jobs:
           pio run -e nuclearcounter   -t buildfs
           pio run -e nuclearcounter_s3 -t buildfs
 
+      - name: Verify build artifacts (rebuild if missing)
+        run: |
+          # A CI run (2026-10-16, 38884626430) lost .pio/build/NuclearCounterV2_1/
+          # bootloader.bin between the build step and packaging even though the
+          # build log shows esptool creating it — suspected interference from the
+          # SFOS step's pioarduino platform, which replaces the shared
+          # ~/.platformio/penv mid-job. Rather than chase that, verify the
+          # artifacts the packaging step needs and rebuild any env that lost
+          # them (incremental pio run regenerates only what is missing).
+          set -euo pipefail
+          to_rebuild=""
+          for e in NuclearCounterV2_1 NuclearCounterV3_0_C3 NuclearCounterV3_0; do
+            for f in bootloader.bin partitions.bin firmware.bin; do
+              if [ ! -f ".pio/build/$e/$f" ]; then
+                echo "WARNING: .pio/build/$e/$f missing"
+                case " $to_rebuild " in *" $e "*) ;; *) to_rebuild="$to_rebuild $e";; esac
+              fi
+            done
+          done
+          if [ -n "$to_rebuild" ]; then
+            echo "--- .pio/build contents at time of loss (for diagnosis) ---"
+            ls -la .pio/build/ 2>&1 || true
+            for e in $to_rebuild; do
+              pio run -e "$e"
+            done
+          fi
+          for e in NuclearCounterV2_1 NuclearCounterV3_0_C3 NuclearCounterV3_0; do
+            for f in bootloader.bin partitions.bin firmware.bin; do
+              test -f ".pio/build/$e/$f"
+            done
+          done
+          echo "All required artifacts present."
+
       - name: Package artifacts (v2.1 C3 + v3.0 C3 + v3.0 S3)
         run: |
           set -euo pipefail
