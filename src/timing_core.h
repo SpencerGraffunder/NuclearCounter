@@ -6,33 +6,19 @@
 #include "config/config.h"
 #include "filters/kalman.h"
 
+// Pure timing state machines (LapData, Extremum, LapDetector,
+// ExtremumTracker, LapRingBuffer, LapStats) — hardware-free so the native
+// unit tests ([env:Test]) can exercise the exact same code.
+#include "timing/timing_logic.h"
+
 // NuclearCounter RX5808 class (owns the RX5808 pins in this project)
 class RX5808;
-
-// Structure to hold lap data
-struct LapData {
-  uint32_t timestamp_ms;    // Lap timestamp in milliseconds
-  uint16_t lap_time_ms;     // Time since last lap (0 for first lap)
-  uint8_t rssi_peak;        // Peak RSSI during this lap
-  uint8_t pilot_id;         // Pilot ID (0-based)
-  bool valid;               // Whether this lap data is valid
-};
-
-// Structure to hold RSSI extremum data (for marshal mode history)
-struct Extremum {
-  uint8_t rssi;             // RSSI value at extremum
-  uint32_t first_time;      // Timestamp when extremum started (milliseconds)
-  uint16_t duration;        // Duration extremum was held (milliseconds)
-  bool valid;               // Whether this extremum is valid
-};
 
 // Structure to hold RSSI sample with timestamp (for race history export)
 struct RSSISample {
   uint32_t timestamp_ms;    // Timestamp in milliseconds since race start
   uint8_t rssi;             // Filtered RSSI value
 };
-
-#define EXTREMUM_BUFFER_SIZE 128  // Circular buffer for extremums (must be power of 2) - reduced for memory-constrained ESP32
 
 // Structure to hold current timing state
 struct TimingState {
@@ -56,11 +42,14 @@ struct TimingState {
 
 class TimingCore {
 private:
+  // `state` is the public snapshot (TimingState); the detector/tracker below
+  // are the live owners of the per-sample state machine and are kept in sync
+  // into `state` by the timing task (all under timing_mutex).
   TimingState state;
-  LapData lap_buffer[MAX_LAPS_STORED];
-  uint8_t lap_write_index;
-  uint8_t lap_read_index;
-  
+  LapDetector detector_;
+  LapRingBuffer<MAX_LAPS_STORED> laps_;
+  ExtremumTracker extrema_;
+
   // NuclearCounter RX5808 instance (frequency control); RSSI is read directly
   // from RSSI_PIN with the oneshot ADC (polling, same as the NuclearCounter
   // firmware — the DMA/continuous ADC driver conflicts with the battery ADC).
@@ -69,26 +58,6 @@ private:
   // RSSI filtering - Kalman filter
   KalmanFilter rssi_filter;
   
-  // Peak tracking
-  uint8_t rssi_peak;           // Current peak RSSI value
-  uint32_t rssi_peak_time_ms;  // Timestamp when peak occurred
-  uint32_t lap_start_time_ms;  // Timestamp when current lap started
-  uint32_t race_start_time_ms; // Timestamp when race started
-  uint32_t min_lap_ms;         // Minimum lap time configuration
-  
-  // Extremum tracking (circular buffers for marshal mode)
-  Extremum peak_buffer[EXTREMUM_BUFFER_SIZE];
-  uint8_t peak_write_index;
-  uint8_t peak_read_index;
-  
-  Extremum nadir_buffer[EXTREMUM_BUFFER_SIZE];
-  uint8_t nadir_write_index;
-  uint8_t nadir_read_index;
-  
-  // Current extremum being tracked
-  Extremum current_peak;
-  Extremum current_nadir;
-
   // RSSI history buffering (for race data export)
 #if RSSI_HISTORY_ENABLED
   RSSISample* rssi_history_buffer;  // Dynamically allocated circular buffer
@@ -116,17 +85,6 @@ private:
   // RSSI processing
   uint8_t readRawRSSI();
   uint8_t filterRSSI(uint8_t raw_rssi);
-  bool detectCrossing(uint8_t filtered_rssi);
-  
-  // Lap processing
-  void recordLap(uint32_t timestamp, uint8_t peak_rssi);
-  
-  // Extremum tracking
-  void processExtremums(uint32_t timestamp, uint8_t filtered_rssi);
-  void finalizePeak(uint32_t timestamp);
-  void finalizeNadir(uint32_t timestamp);
-  void bufferPeak(const Extremum& peak);
-  void bufferNadir(const Extremum& nadir);
   
   // FreeRTOS task function
   static void timingTask(void* parameter);

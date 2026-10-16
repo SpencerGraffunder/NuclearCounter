@@ -53,6 +53,40 @@ env:
   STARFORGEOS_REF: main
 
 jobs:
+  # Host-side unit tests for the extracted timing logic (LapDetector,
+  # ExtremumTracker, LapRingBuffer, LapStats) and the Kalman RSSI filter.
+  # Pure C++ on the 'native' platform — no ESP toolchain, no hardware,
+  # no StarForgeOS checkout needed, so it runs in well under a minute.
+  test:
+    name: Unit tests (host)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: pio-${{ runner.os }}-${{ hashFiles('**/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install platformio
+
+      - name: Run host unit tests
+        run: pio test -e Test
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30

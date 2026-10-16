@@ -52,7 +52,11 @@ static void getBandChannelFromFrequency(uint16_t freq, uint8_t& band, uint8_t& c
 
 
 TimingCore::TimingCore() {
-  // Initialize state
+  // Initialize the public state snapshot. The live state machines (detector_,
+  // extrema_, laps_) are default-constructed with the same initial values
+  // (enter/exit = ENTER/EXIT_RSSI, nadirs = 255, min lap = MIN_LAP_MS) — see
+  // initDefaults()/reset() in timing/timing_logic.h, which are pinned by the
+  // native unit tests.
   memset(&state, 0, sizeof(state));
   state.enter_rssi = ENTER_RSSI;
   state.exit_rssi = EXIT_RSSI;
@@ -61,14 +65,7 @@ TimingCore::TimingCore() {
   state.pass_rssi_nadir = 255;
   state.last_rssi = 0;
   state.rssi_change = 0;
-  
-  // Initialize buffers
-  memset(lap_buffer, 0, sizeof(lap_buffer));
-  memset(peak_buffer, 0, sizeof(peak_buffer));
-  memset(nadir_buffer, 0, sizeof(nadir_buffer));
-  
-  lap_write_index = 0;
-  lap_read_index = 0;
+
   debug_enabled = false; // Default to no debug output
   recent_freq_change = false;
   freq_change_time = 0;
@@ -79,25 +76,16 @@ TimingCore::TimingCore() {
   rssi_filter.setMeasurementNoise(RSSI_FILTER_Q * 0.01f);
   rssi_filter.setProcessNoise(RSSI_FILTER_R * 0.0001f);
   
-  // Initialize peak tracking
-  rssi_peak = 0;
-  rssi_peak_time_ms = 0;
-  lap_start_time_ms = 0;
-  race_start_time_ms = 0;
-  min_lap_ms = MIN_LAP_MS;
-  
   // RX5808 instance is bound via setRX5808() before begin()
   _rx5808 = nullptr;
-  
-  // Initialize extremum tracking
-  peak_write_index = 0;
-  peak_read_index = 0;
-  nadir_write_index = 0;
-  nadir_read_index = 0;
 
-  memset(&current_peak, 0, sizeof(current_peak));
-  memset(&current_nadir, 0, sizeof(current_nadir));
-  current_nadir.rssi = 255;
+  // The detector's built-in defaults match the config constants, but set them
+  // explicitly so a future config.h change cannot silently diverge from the
+  // (config-free) timing_logic.h defaults.
+  detector_.setEnterRssi(ENTER_RSSI);
+  detector_.setExitRssi(EXIT_RSSI);
+  detector_.setMinLapMs(MIN_LAP_MS);
+  detector_.setHardMinLapMs(MIN_LAP_TIME_MS);
 
   // Initialize RSSI history buffering
   // CRITICAL: Defer allocation until after WiFi is initialized to prevent heap fragmentation
@@ -261,7 +249,7 @@ void TimingCore::timingTask(void* parameter) {
       // Buffer RSSI sample for race data export (50Hz)
       // Lazy allocation: Allocate buffer on first use (after WiFi is initialized)
 #if RSSI_HISTORY_ENABLED
-      if (core->race_start_time_ms > 0 &&
+      if (core->detector_.raceStartMs() > 0 &&
           (current_time - core->last_rssi_sample_time >= RSSI_SAMPLE_INTERVAL_MS)) {
         // The RSSI history buffer is allocated by allocateRSSIHistory() —
         // from a background task after boot and at race start — never in
@@ -269,7 +257,7 @@ void TimingCore::timingTask(void* parameter) {
         // critical section (it held the lock for seconds and stalled every
         // setActivated()/state change until fixed).
         if (core->rssi_history_buffer) {
-          uint32_t race_time = current_time - core->race_start_time_ms;
+          uint32_t race_time = current_time - core->detector_.raceStartMs();
           core->rssi_history_buffer[core->rssi_history_write_index].timestamp_ms = race_time;
           core->rssi_history_buffer[core->rssi_history_write_index].rssi = filtered_rssi;
           core->rssi_history_write_index = (core->rssi_history_write_index + 1) % RSSI_HISTORY_SIZE;
@@ -281,90 +269,54 @@ void TimingCore::timingTask(void* parameter) {
       }
 #endif
 
-      // Update nadir tracking (always track, regardless of crossing state)
-      if (filtered_rssi < core->state.nadir_rssi) {
-        core->state.nadir_rssi = filtered_rssi;
-      }
-      if (filtered_rssi < core->state.pass_rssi_nadir) {
-        core->state.pass_rssi_nadir = filtered_rssi;
+      // Process extremums for marshal mode history
+      core->extrema_.process(current_time, filtered_rssi);
+
+      // Lap detection state machine (nadir tracking, min-lap capture gate,
+      // peak capture, crossing events, lap recording). Extracted verbatim into
+      // timing/timing_logic.h so the native unit tests run the identical code;
+      // the events mirror the old inline debug prints + callbacks.
+      LapDetector::Events ev = core->detector_.process(current_time, filtered_rssi);
+
+      // Sync live detector/tracker state into the public snapshot so
+      // getState() and the individual getters observe it (all under mutex).
+      core->state.nadir_rssi = core->detector_.nadirRssi();
+      core->state.pass_rssi_nadir = core->detector_.passNadirRssi();
+      core->state.peak_rssi = core->detector_.peakRssi();
+      core->state.crossing_active = core->detector_.crossingActive();
+      core->state.crossing_start = core->detector_.crossingStart();
+      core->state.last_lap_time = core->detector_.lastLapTime();
+      core->state.lap_count = core->detector_.lapCount();
+      core->state.last_rssi = core->extrema_.lastRssi();
+      core->state.rssi_change = core->extrema_.rssiChange();
+
+      if (ev.crossing_started) {
+        if (core->debug_enabled) {
+          Serial.printf("Crossing started - RSSI: %d\n", filtered_rssi);
+        }
+      } else if (ev.crossing_ended) {
+        if (core->debug_enabled) {
+          Serial.printf("Crossing ended - RSSI: %d\n", filtered_rssi);
+        }
       }
 
-      // Process extremums for marshal mode history
-      core->processExtremums(current_time, filtered_rssi);
-      
-      // Check if minimum lap time has elapsed (prevents peak capture too soon)
-      bool can_capture_peak = true;
-      if (core->min_lap_ms > 0 && core->lap_start_time_ms > 0) {
-        uint32_t time_since_lap_start = current_time - core->lap_start_time_ms;
-        if (time_since_lap_start < core->min_lap_ms) {
-          can_capture_peak = false;
+      if (ev.lap_recorded) {
+        core->laps_.push(core->detector_.lastLap());
+        if (core->debug_enabled) {
+          // (The old inline version printed core->rssi_peak *after* recordLap
+          // had already reset it to 0 — this prints the real peak.)
+          Serial.printf("Lap recorded - Peak RSSI: %d, Time since last: %dms\n",
+                        core->detector_.lastLap().rssi_peak,
+                        ev.since_last_lap_ms);
         }
-      }
-      
-      // Capture peak only when RSSI >= enterRssi and min lap time has elapsed
-      if (can_capture_peak && filtered_rssi >= core->state.enter_rssi) {
-        // Check if RSSI is greater than the previous detected peak
-        if (filtered_rssi > core->rssi_peak) {
-          core->rssi_peak = filtered_rssi;
-          core->rssi_peak_time_ms = current_time;
-          core->state.peak_rssi = filtered_rssi;  // Update state for compatibility
-        }
-      }
-      
-      // Check if peak is captured (RSSI dropped below peak AND below exit threshold)
-      bool peak_captured = (filtered_rssi < core->rssi_peak) && (filtered_rssi < core->state.exit_rssi);
-      
-      // Update crossing state based on whether we're capturing a peak
-      bool was_crossing = core->state.crossing_active;
-      core->state.crossing_active = (can_capture_peak && filtered_rssi >= core->state.enter_rssi);
-      
-      // Handle crossing state changes
-      if (was_crossing != core->state.crossing_active) {
-        if (core->state.crossing_active) {
-          // Starting a crossing
-          core->state.crossing_start = current_time;
-          if (core->debug_enabled) {
-            Serial.printf("Crossing started - RSSI: %d\n", filtered_rssi);
-          }
-        } else {
-          // Ending a crossing
-          if (core->debug_enabled) {
-            Serial.printf("Crossing ended - RSSI: %d\n", filtered_rssi);
-          }
-        }
-        
-        // Notify callback if registered  
-        if (core->crossing_callback) {
-          core->crossing_callback(core->state.crossing_active, filtered_rssi);
-        }
-      }
-      
-      // Check if lap should be recorded (peak captured and enough time since last lap)
-      if (peak_captured && core->rssi_peak > 0) {
-        uint32_t time_since_last_lap = (core->state.last_lap_time > 0) ? 
-                                       (current_time - core->state.last_lap_time) : 
-                                       UINT32_MAX;
-        
-        // Require minimum time between laps
-        if (time_since_last_lap >= MIN_LAP_TIME_MS) {
-          // Valid lap - record it using peak timestamp
-          core->recordLap(core->rssi_peak_time_ms, core->rssi_peak);
-          // Reset pass nadir after lap recorded
-          core->state.pass_rssi_nadir = 255;
-          
-          if (core->debug_enabled) {
-            Serial.printf("Lap recorded - Peak RSSI: %d, Time since last: %dms\n", 
-                         core->rssi_peak, time_since_last_lap);
-          }
-        } else {
-          // Lap rejected - too soon after last lap
-          // Only print rejection message once per second to avoid spam
-          static uint32_t last_rejection_print = 0;
-          if (core->debug_enabled && (current_time - last_rejection_print >= 1000)) {
-            Serial.printf("Lap rejected - Too soon (only %dms since last lap, need %dms)\n", 
-                         time_since_last_lap, MIN_LAP_TIME_MS);
-            last_rejection_print = current_time;
-          }
+      } else if (ev.lap_rejected) {
+        // Lap rejected - too soon after last lap
+        // Only print rejection message once per second to avoid spam
+        static uint32_t last_rejection_print = 0;
+        if (core->debug_enabled && (current_time - last_rejection_print >= 1000)) {
+          Serial.printf("Lap rejected - Too soon (only %dms since last lap, need %dms)\n",
+                       ev.since_last_lap_ms, MIN_LAP_TIME_MS);
+          last_rejection_print = current_time;
         }
       }
       
@@ -501,202 +453,11 @@ uint8_t TimingCore::filterRSSI(uint8_t raw_rssi) {
   return (uint8_t)round(filtered);
 }
 
-bool TimingCore::detectCrossing(uint8_t filtered_rssi) {
-  // Dual threshold-based crossing detection
-  // Crossing is active when RSSI >= enter threshold
-  return filtered_rssi >= state.enter_rssi;
-}
+// The per-sample lap-detection state machine (recordLap/processExtremums/
+// finalizePeak/finalizeNadir/bufferPeak/bufferNadir/detectCrossing) moved
+// verbatim into timing/timing_logic.h (LapDetector + ExtremumTracker), which
+// the native unit tests ([env:Test]) exercise directly.
 
-void TimingCore::recordLap(uint32_t timestamp, uint8_t peak_rssi) {
-  LapData& lap = lap_buffer[lap_write_index];
-  
-  // Use peak timestamp for lap timing
-  lap.timestamp_ms = timestamp;
-  
-  // Calculate lap time: first lap uses race start time, others use previous lap start time
-  if (state.lap_count == 0) {
-    // First lap - use race start time
-    lap.lap_time_ms = (race_start_time_ms > 0) ? 
-                     (timestamp - race_start_time_ms) : 0;
-  } else {
-    // Subsequent laps - use previous lap start time
-    lap.lap_time_ms = (lap_start_time_ms > 0) ? 
-                     (timestamp - lap_start_time_ms) : 0;
-  }
-  
-  lap.rssi_peak = peak_rssi;
-  lap.pilot_id = 0; // Single pilot for now
-  lap.valid = true;
-  
-  // Update state
-  state.last_lap_time = timestamp;
-  state.lap_count++;
-  lap_start_time_ms = timestamp;  // Update lap start time for next lap
-  
-  // Advance write index
-  lap_write_index = (lap_write_index + 1) % MAX_LAPS_STORED;
-  
-  // Reset peak tracking for next lap
-  rssi_peak = 0;
-  rssi_peak_time_ms = 0;
-  state.peak_rssi = 0;
-  
-        // Debug output disabled to avoid interfering with serial protocol
-        // DEBUG_PRINT("Lap recorded: ");
-        // DEBUG_PRINT(state.lap_count);
-        // DEBUG_PRINT(", Time: ");
-        // DEBUG_PRINT(lap.lap_time_ms);
-        // DEBUG_PRINT("ms, Peak: ");
-        // DEBUG_PRINTLN(peak_rssi);
-  
-  // Notify callback if registered
-  if (lap_callback) {
-    lap_callback(lap);
-  }
-}
-
-// Extremum tracking implementation (for marshal mode)
-// Based on RotorHazard reference implementation in RssiNode.cpp
-void TimingCore::processExtremums(uint32_t timestamp, uint8_t filtered_rssi) {
-  // Detect RSSI change direction
-  const int rssiChange = filtered_rssi - state.last_rssi;
-  
-  if (rssiChange > 0) {
-    // RSSI is rising
-    // Must buffer latest peak to prevent losing it (overwriting any unsent peak)
-    bufferPeak(current_peak);
-    
-    // Start tracking new peak with current RSSI value
-    current_peak.rssi = filtered_rssi;
-    current_peak.first_time = timestamp;
-    current_peak.duration = 0;
-    current_peak.valid = true;
-    
-    // If RSSI was falling or unchanged, but it's rising now, we found a nadir
-    if (state.rssi_change <= 0 && current_nadir.valid) {
-      // Finalize and buffer the nadir we were tracking
-      finalizeNadir(timestamp);
-    }
-    
-  } else if (rssiChange < 0) {
-    // RSSI is falling
-    // Must buffer latest nadir to prevent losing it (overwriting any unsent nadir)
-    bufferNadir(current_nadir);
-    
-    // Start tracking new nadir with current RSSI value
-    current_nadir.rssi = filtered_rssi;
-    current_nadir.first_time = timestamp;
-    current_nadir.duration = 0;
-    current_nadir.valid = true;
-    
-    // If RSSI was rising or unchanged, but it's falling now, we found a peak
-    if (state.rssi_change >= 0 && current_peak.valid) {
-      // Finalize and buffer the peak we were tracking
-      finalizePeak(timestamp);
-    }
-    
-  } else {
-    // RSSI is unchanged
-    if (filtered_rssi == current_peak.rssi && current_peak.valid) {
-      // Still at peak - extend duration
-      uint32_t duration = timestamp - current_peak.first_time;
-      current_peak.duration = (duration > 0xFFFF) ? 0xFFFF : duration;
-      
-      // If peak duration maxed out, buffer it and start a new one
-      if (current_peak.duration == 0xFFFF) {
-        bufferPeak(current_peak);
-        current_peak.rssi = filtered_rssi;
-        current_peak.first_time = timestamp;
-        current_peak.duration = 0;
-        current_peak.valid = true;
-      }
-    } else if (filtered_rssi == current_nadir.rssi && current_nadir.valid) {
-      // Still at nadir - extend duration
-      uint32_t duration = timestamp - current_nadir.first_time;
-      current_nadir.duration = (duration > 0xFFFF) ? 0xFFFF : duration;
-      
-      // If nadir duration maxed out, buffer it and start a new one
-      if (current_nadir.duration == 0xFFFF) {
-        bufferNadir(current_nadir);
-        current_nadir.rssi = filtered_rssi;
-        current_nadir.first_time = timestamp;
-        current_nadir.duration = 0;
-        current_nadir.valid = true;
-      }
-    }
-  }
-  
-  // Update state for next iteration
-  state.last_rssi = filtered_rssi;
-  
-  // Clamp rssiChange to prevent overflow (like RotorHazard does)
-  if (rssiChange > 127) {
-    state.rssi_change = 127;
-  } else if (rssiChange < -127) {
-    state.rssi_change = -127;
-  } else {
-    state.rssi_change = rssiChange;
-  }
-}
-
-void TimingCore::finalizePeak(uint32_t timestamp) {
-  if (current_peak.valid && current_peak.rssi > 0) {
-    // Calculate final duration
-    uint32_t duration = timestamp - current_peak.first_time;
-    current_peak.duration = (duration > 0xFFFF) ? 0xFFFF : duration;
-    
-    // Buffer the completed peak
-    bufferPeak(current_peak);
-  }
-  
-  // Reset for next peak
-  memset(&current_peak, 0, sizeof(current_peak));
-}
-
-void TimingCore::finalizeNadir(uint32_t timestamp) {
-  if (current_nadir.valid && current_nadir.rssi < 255) {
-    // Calculate final duration
-    uint32_t duration = timestamp - current_nadir.first_time;
-    current_nadir.duration = (duration > 0xFFFF) ? 0xFFFF : duration;
-    
-    // Buffer the completed nadir
-    bufferNadir(current_nadir);
-  }
-  
-  // Reset for next nadir
-  memset(&current_nadir, 0, sizeof(current_nadir));
-  current_nadir.rssi = 255;
-}
-
-void TimingCore::bufferPeak(const Extremum& peak) {
-  // Only buffer valid peaks (RotorHazard checks validity before buffering)
-  if (!peak.valid || peak.rssi == 0) {
-    return;
-  }
-  
-  peak_buffer[peak_write_index] = peak;
-  peak_write_index = (peak_write_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  
-  // Check for overflow (if write catches read, drop oldest)
-  if (peak_write_index == peak_read_index) {
-    peak_read_index = (peak_read_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  }
-}
-
-void TimingCore::bufferNadir(const Extremum& nadir) {
-  // Only buffer valid nadirs (RotorHazard checks validity before buffering)
-  if (!nadir.valid || nadir.rssi == 255) {
-    return;
-  }
-  
-  nadir_buffer[nadir_write_index] = nadir;
-  nadir_write_index = (nadir_write_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  
-  // Check for overflow (if write catches read, drop oldest)
-  if (nadir_write_index == nadir_read_index) {
-    nadir_read_index = (nadir_read_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  }
-}
 
 void TimingCore::setRX5808Frequency(uint16_t freq_mhz) {
   // The NC RX5808 instance owns the RF pins; it must be bound first
@@ -752,6 +513,7 @@ void TimingCore::setFrequency(uint16_t freq_mhz) {
 void TimingCore::setEnterRssi(uint8_t enter_rssi) {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
     state.enter_rssi = enter_rssi;
+    detector_.setEnterRssi(enter_rssi);
     xSemaphoreGive(timing_mutex);
   }
 }
@@ -759,6 +521,7 @@ void TimingCore::setEnterRssi(uint8_t enter_rssi) {
 void TimingCore::setExitRssi(uint8_t exit_rssi) {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
     state.exit_rssi = exit_rssi;
+    detector_.setExitRssi(exit_rssi);
     xSemaphoreGive(timing_mutex);
   }
 }
@@ -769,13 +532,15 @@ void TimingCore::setThreshold(uint8_t threshold) {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
     state.enter_rssi = threshold;
     state.exit_rssi = (threshold > 20) ? (threshold - 20) : threshold;
+    detector_.setEnterRssi(threshold);
+    detector_.setExitRssi((threshold > 20) ? (threshold - 20) : threshold);
     xSemaphoreGive(timing_mutex);
   }
 }
 
 void TimingCore::setMinLapMs(uint32_t min_lap_ms) {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
-    this->min_lap_ms = min_lap_ms;
+    detector_.setMinLapMs(min_lap_ms);
     xSemaphoreGive(timing_mutex);
   }
 }
@@ -812,9 +577,9 @@ void TimingCore::setActivated(bool active) {
   // (re)set by the caller or the task is already running.
   if (xSemaphoreTake(timing_mutex, pdMS_TO_TICKS(100))) {
     state.activated = active;
-    if (active && race_start_time_ms == 0) {
+    if (active && detector_.raceStartMs() == 0) {
       // Set race start time when first activated
-      race_start_time_ms = millis();
+      detector_.setRaceStartMs(millis());
     }
     // Timing activated/deactivated
     xSemaphoreGive(timing_mutex);
@@ -823,6 +588,13 @@ void TimingCore::setActivated(bool active) {
 
 void TimingCore::reset() {
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
+    // Reset the live state machines, then mirror them into the public
+    // snapshot so getState() sees the reset state immediately (the old code
+    // wrote the same fields into `state` directly).
+    detector_.reset();
+    extrema_.reset();
+    laps_.reset();
+
     state.lap_count = 0;
     state.last_lap_time = 0;
     state.peak_rssi = 0;
@@ -832,116 +604,59 @@ void TimingCore::reset() {
     state.last_rssi = 0;
     state.rssi_change = 0;
     
-    // Reset peak tracking
-    rssi_peak = 0;
-    rssi_peak_time_ms = 0;
-    lap_start_time_ms = 0;
-    race_start_time_ms = 0;
-    
-    // Clear lap buffer
-    memset(lap_buffer, 0, sizeof(lap_buffer));
-    lap_write_index = 0;
-    lap_read_index = 0;
-    
-    // Clear extremum buffers
-    memset(peak_buffer, 0, sizeof(peak_buffer));
-    memset(nadir_buffer, 0, sizeof(nadir_buffer));
-    peak_write_index = 0;
-    peak_read_index = 0;
-    nadir_write_index = 0;
-    nadir_read_index = 0;
-    
-    memset(&current_peak, 0, sizeof(current_peak));
-    memset(&current_nadir, 0, sizeof(current_nadir));
-    current_nadir.rssi = 255;
-    
     // Timing reset
     xSemaphoreGive(timing_mutex);
   }
 }
 
 bool TimingCore::hasNewLap() {
-  return lap_read_index != lap_write_index;
+  return laps_.hasNew();
 }
 
 LapData TimingCore::getNextLap() {
-  if (!hasNewLap()) {
-    LapData empty = {0};
-    return empty;
-  }
-  
-  LapData lap = lap_buffer[lap_read_index];
-  lap_read_index = (lap_read_index + 1) % MAX_LAPS_STORED;
-  return lap;
+  return laps_.pop();
 }
 
 LapData TimingCore::getLastLap() {
-  if (state.lap_count == 0) {
-    LapData empty = {0};
-    return empty;
+  if (detector_.lapCount() == 0) {
+    return LapData{0, 0, 0, 0, false};
   }
-  
-  uint8_t last_index = (lap_write_index - 1 + MAX_LAPS_STORED) % MAX_LAPS_STORED;
-  return lap_buffer[last_index];
+  return laps_.last();
 }
 
 uint8_t TimingCore::getAvailableLaps() {
-  return (lap_write_index - lap_read_index + MAX_LAPS_STORED) % MAX_LAPS_STORED;
+  return laps_.available();
 }
 
 // Extremum data access methods (for marshal mode)
 bool TimingCore::hasPendingPeak() {
-  return peak_read_index != peak_write_index;
+  return extrema_.hasPendingPeak();
 }
 
 bool TimingCore::hasPendingNadir() {
-  return nadir_read_index != nadir_write_index;
+  return extrema_.hasPendingNadir();
 }
 
 Extremum TimingCore::getNextPeak() {
-  if (!hasPendingPeak()) {
-    Extremum empty = {0};
-    return empty;
-  }
-  
-  Extremum peak = peak_buffer[peak_read_index];
-  peak_read_index = (peak_read_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  return peak;
+  return extrema_.getNextPeak();
 }
 
 Extremum TimingCore::getNextNadir() {
-  if (!hasPendingNadir()) {
-    Extremum empty = {255, 0, 0, false};
-    return empty;
-  }
-  
-  Extremum nadir = nadir_buffer[nadir_read_index];
-  nadir_read_index = (nadir_read_index + 1) & (EXTREMUM_BUFFER_SIZE - 1);
-  return nadir;
+  return extrema_.getNextNadir();
 }
 
 Extremum TimingCore::peekNextPeak() const {
-  if (peak_read_index == peak_write_index) {
-    Extremum empty = {0, 0, 0, false};
-    return empty;
-  }
-  
-  return peak_buffer[peak_read_index];
+  return extrema_.peekNextPeak();
 }
 
 Extremum TimingCore::peekNextNadir() const {
-  if (nadir_read_index == nadir_write_index) {
-    Extremum empty = {255, 0, 0, false};
-    return empty;
-  }
-  
-  return nadir_buffer[nadir_read_index];
+  return extrema_.peekNextNadir();
 }
 
 uint8_t TimingCore::getNadirRSSI() const {
   uint8_t nadir = 255;
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
-    nadir = state.nadir_rssi;
+    nadir = detector_.nadirRssi();
     xSemaphoreGive(timing_mutex);
   }
   return nadir;
@@ -950,7 +665,7 @@ uint8_t TimingCore::getNadirRSSI() const {
 uint8_t TimingCore::getPassNadirRSSI() const {
   uint8_t nadir = 255;
   if (xSemaphoreTake(timing_mutex, portMAX_DELAY)) {
-    nadir = state.pass_rssi_nadir;
+    nadir = detector_.passNadirRssi();
     xSemaphoreGive(timing_mutex);
   }
   return nadir;
@@ -1045,7 +760,7 @@ uint8_t TimingCore::getThreshold() const {
 }
 
 uint32_t TimingCore::getMinLapMs() const {
-  return min_lap_ms;
+  return detector_.minLapMs();
 }
 
 uint16_t TimingCore::getCurrentFrequency() const {
