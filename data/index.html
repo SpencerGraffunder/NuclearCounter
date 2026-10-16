@@ -122,6 +122,10 @@
                 <div id="otaBootRow" style="display:none; margin-top: 8px;">
                     <button class="btn btn-primary" id="otaBootBtn" onclick="bootOtaSlot()">🔄 Reboot into new firmware</button>
                 </div>
+                <div class="release-check" id="releaseCheck" style="display:none;">
+                    <span id="releaseCheckText"></span>
+                    <a id="releaseCheckLink" href="#" target="_blank" rel="noopener" style="display:none;">release page &#8599;</a>
+                </div>
                 <p class="update-note">Only the slot that is NOT running can be updated from this page — the running firmware is protected. The board keeps running normally until you press the reboot button. The web UI itself is part of the firmware image, so a firmware update also refreshes the page you are looking at (after the reboot).</p>
             </div>
         </div>

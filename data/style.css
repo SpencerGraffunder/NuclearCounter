@@ -1060,6 +1060,32 @@ body.race-stopped .control-panel {
     line-height: 1.5;
 }
 
+/* Release check row in the Update panel (client-side: the phone compares the
+   board's build SHA from /api/status against the latest GitHub release). */
+.release-check {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid #2a3a5c;
+    border-radius: 6px;
+    background: #0d1526;
+    font-size: 12px;
+    color: #cfe0ff;
+    line-height: 1.5;
+}
+.release-check a {
+    color: #00ff88;
+    text-decoration: none;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.release-check a:hover {
+    text-decoration: underline;
+}
+
 .btn-small {
     padding: 6px 12px;
     font-size: 11px;

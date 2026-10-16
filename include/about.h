@@ -11,10 +11,12 @@
 #define BUILD_SHA "dev"
 #endif
 
-// Beta line: the about page is 3 centered lines (7x13B name, 5x7 by-line and
-// version). "v3.0.0-beta1-<sha>" measures 100px in the 5x7 font, which fits
-// inside the safe drawing width (x=4..120); a longer suffix would clip.
-#define VERSION "v3.0.0-beta1-" BUILD_SHA
+// The about page is 3 centered lines (7x13B name, 5x7 by-line and version).
+// "v3.0.0-<sha>" measures ~60px in the 5x7 font, well inside the safe drawing
+// width (x=4..120). The web UI's release check compares BUILD_SHA against the
+// commit the latest GitHub release tag points at, so the sha is what makes
+// "is this the latest release?" answerable.
+#define VERSION "v3.0.0-" BUILD_SHA
 #define APP_NAME "NuclearCounter"
 #define APP_BY "by NuclearQuads"
 

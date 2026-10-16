@@ -29,6 +29,16 @@ class RaceTimer {
         this.recordingActive = false;
         this._dragSlider = null;  // slider element currently being dragged (sync guard)
 
+        // Release check: the board has no internet (it is a bare AP), so the
+        // PHONE fetches the latest GitHub release and compares the commit the
+        // release tag points at against this board's build SHA (from
+        // /api/status). Throttled to one fetch per 10 minutes.
+        this.buildSha = null;
+        this.firmwareVersion = null;
+        this.latestRelease = null;
+        this.releaseCheckFailed = false;
+        this._releaseCheckedAt = 0;
+
         this.initializeUI();
         this.initializeCanvas();
         this.loadChannels();
@@ -165,6 +175,70 @@ class RaceTimer {
     // dropdowns and the RSSI / min-lap sliders. Without this, changes made on
     // the screen never appeared in the web UI and a fresh page load showed the
     // HTML defaults instead of the board's actual state.
+    checkForRelease() {
+        const now = Date.now();
+        if (!this.buildSha) {
+            // Older firmware (no build_sha in /api/status) — keep the row
+            // hidden, including if we are talking to an older board after a
+            // downgrade.
+            const box = document.getElementById('releaseCheck');
+            if (box) box.style.display = 'none';
+            return;
+        }
+        if (now - this._releaseCheckedAt < 10 * 60 * 1000) {
+            return;  // recently checked
+        }
+        this._releaseCheckedAt = now;
+        fetch('https://api.github.com/repos/SpencerGraffunder/NuclearCounter/releases/latest', {
+            headers: { 'Accept': 'application/vnd.github+json' }
+        })
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(rel => {
+                this.latestRelease = {
+                    tag: rel.tag_name,
+                    commit: rel.target_commitish || '',
+                    url: rel.html_url || ''
+                };
+                this.releaseCheckFailed = false;
+                this.renderReleaseCheck();
+            })
+            .catch(() => {
+                this.releaseCheckFailed = true;
+                this.renderReleaseCheck();
+            });
+    }
+
+    renderReleaseCheck() {
+        const box = document.getElementById('releaseCheck');
+        const text = document.getElementById('releaseCheckText');
+        const link = document.getElementById('releaseCheckLink');
+        if (!box || !text || !link) return;
+
+        if (!this.buildSha) { box.style.display = 'none'; return; }
+
+        let html = '';
+        let showLink = false;
+        if (this.buildSha === 'dev') {
+            html = 'Custom build (no release info)';
+        } else if (this.releaseCheckFailed && !this.latestRelease) {
+            html = 'Could not check for updates (no internet?)';
+        } else if (!this.latestRelease) {
+            html = 'Checking for updates…';
+        } else if (this.latestRelease.commit.startsWith(this.buildSha)) {
+            // The running firmware IS the commit the latest release was tagged at.
+            html = '✅ Running the latest release (' + this.latestRelease.tag + ')';
+        } else {
+            html = '🆕 Update available: ' + this.latestRelease.tag +
+                ' (running ' + (this.firmwareVersion || this.buildSha) +
+                ') — download the matching zip and OTA it below';
+            link.href = this.latestRelease.url;
+            showLink = true;
+        }
+        text.innerHTML = html;
+        link.style.display = showLink ? 'inline' : 'none';
+        box.style.display = 'flex';
+    }
+
     syncControls(data) {
         // Band/channel dropdowns from the live frequency. The frequency table
         // was loaded from /api/get_channels; until then there is nothing to
@@ -307,6 +381,11 @@ class RaceTimer {
         // Keep the config controls (band/channel, RSSI thresholds, min lap)
         // in sync with the board — see syncControls for why.
         this.syncControls(data);
+
+        // Feed the release check (fields are absent from older firmware).
+        if (data.build_sha) this.buildSha = data.build_sha;
+        if (data.version) this.firmwareVersion = data.version;
+        this.checkForRelease();
 
         // Store RSSI for graphing
         const rssiValue = data.rssi || data.current_rssi || 0;

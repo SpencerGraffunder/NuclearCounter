@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "config/config.h"
+#include "about.h"  // VERSION / BUILD_SHA for the release check (see app.js)
 #include "settings/settings_manager.h"
 #include "generated/ui_pack.h"  // web UI embedded in the image (tools/build_ui_pack.py)
 #include <WiFi.h>
@@ -13,7 +14,7 @@
 #include <freertos/task.h>
 
 // Buffer sizes for JSON responses (with safety margins)
-#define JSON_STATUS_BUFFER_SIZE 512      // Status response (most frequent)
+#define JSON_STATUS_BUFFER_SIZE 640      // Status response (most frequent)
 #define JSON_LAPS_BUFFER_SIZE 16384       // Laps response (100 laps max: ~160 bytes each)
 #define JSON_RSSI_BUFFER_SIZE 32768       // RSSI history (30K samples max: ~20 bytes each)
 #define JSON_CHANNELS_BUFFER_SIZE 2048    // Channels response (static data)
@@ -336,9 +337,11 @@ void WebServerManager::handleGetStatus(AsyncWebServerRequest* request) {
     // Build JSON using snprintf (bounds-checked, efficient)
     int len = snprintf(jsonBuffer, JSON_STATUS_BUFFER_SIZE,
         "{\"status\":\"%s\",\"lap_count\":%zu,\"uptime\":%lu,\"rssi\":%u,\"frequency\":%u,"
-        "\"enter_rssi\":%u,\"exit_rssi\":%u,\"threshold\":%u,\"min_lap\":%lu,\"crossing\":%s",
+        "\"enter_rssi\":%u,\"exit_rssi\":%u,\"threshold\":%u,\"min_lap\":%lu,\"crossing\":%s,"
+        "\"version\":\"%s\",\"build_sha\":\"%s\"",
         (*_raceActive ? "racing" : "ready"), lapCount, uptime, current_rssi, frequency,
-        enter_rssi, exit_rssi, enter_rssi, (unsigned long)min_lap, crossing ? "true" : "false");
+        enter_rssi, exit_rssi, enter_rssi, (unsigned long)min_lap, crossing ? "true" : "false",
+        VERSION, BUILD_SHA);
 
 #if ENABLE_BATTERY_MONITOR && defined(BATTERY_ADC_PIN)
     // Add battery status if available
