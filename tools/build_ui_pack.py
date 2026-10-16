@@ -54,7 +54,14 @@ def main():
         var = f"k{url.replace('.', '_')}"
         lines = [f"static const uint8_t {var}[] PROGMEM = {{"]
         hexs = data.hex()
-        lines.append(", ".join("0x" + hexs[i:i + 2] for i in range(0, len(hexs), 32)))
+        # Step is 2: each byte is TWO hex chars. A step of 32 (the old bug,
+        # 2026-10-16) silently emitted 1 byte per 16 — the firmware then
+        # served a 1/16-sparse garbage UI while the size comment and sha
+        # below still claimed the full file, so nothing complained.
+        emitted = ["0x" + hexs[i:i + 2] for i in range(0, len(hexs), 2)]
+        if len(emitted) != len(data):
+            sys.exit(f"build_ui_pack: {url} emit mismatch {len(emitted)} != {len(data)}")
+        lines.append(", ".join(emitted))
         lines.append("};")
         blobs.append((var, url, mime, len(data), sha, lines))
 
