@@ -189,14 +189,18 @@ class RaceTimer {
             return;  // recently checked
         }
         this._releaseCheckedAt = now;
-        fetch('https://api.github.com/repos/SpencerGraffunder/NuclearCounter/releases/latest', {
-            headers: { 'Accept': 'application/vnd.github+json' }
-        })
-            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-            .then(rel => {
+        const gh = (url) => fetch(url, { headers: { 'Accept': 'application/vnd.github+json' } })
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+        // Two-step on purpose: /releases/latest's target_commitish is the
+        // branch NAME the release was created from (e.g. "master"), not a
+        // SHA — the tag's actual commit only comes from /commits/<tag>.
+        gh('https://api.github.com/repos/SpencerGraffunder/NuclearCounter/releases/latest')
+            .then(rel => gh('https://api.github.com/repos/SpencerGraffunder/NuclearCounter/commits/' + encodeURIComponent(rel.tag_name))
+                .then(commit => [rel, commit]))
+            .then(([rel, commit]) => {
                 this.latestRelease = {
                     tag: rel.tag_name,
-                    commit: rel.target_commitish || '',
+                    commit: commit.sha || '',
                     url: rel.html_url || ''
                 };
                 this.releaseCheckFailed = false;
