@@ -20,10 +20,15 @@ import sys
 # SCons exec()s pre: scripts without __file__ in scope, so under PlatformIO
 # the repo root comes from the build environment's project dir; standalone
 # (python3 tools/build_ui_pack.py) falls back to __file__.
+# SCons exec()s pre: scripts from the script's own directory, so env.Dir(".")
+# resolves to tools/, NOT the repo root — the original code read data/ from
+# tools/data/ and silently produced nothing (the build then compiled against
+# a stale or missing ui_pack.h). $PROJECT_DIR is the reliable root under SCons;
+# the __file__ fallback covers standalone `python3 tools/build_ui_pack.py`.
 try:
     from SCons.Script import Import
     Import("env")
-    REPO = env.Dir(".").abspath
+    REPO = env.subst("$PROJECT_DIR")
 except Exception:
     REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(REPO, "data")
@@ -95,5 +100,11 @@ def main():
         print(f"build_ui_pack: {os.path.relpath(OUT, REPO)} up to date")
 
 
-if __name__ == "__main__":
-    main()
+# NOTE: main() must run unconditionally. SCons exec()s pre: scripts with a
+# globals dict where __name__ is NOT "__main__", so a classic `if __name__`
+# guard silently skips the generation — the build then compiles against the
+# STALE committed header (it exists, so nothing errors). Caught on CI 2026-10-16:
+# the V2_1 build failed with "generated/ui_pack.h: No such file or directory"
+# because the file had never been generated on a fresh checkout. Standalone
+# runs (python3 tools/build_ui_pack.py) are unaffected.
+main()
